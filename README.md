@@ -1,6 +1,8 @@
 # Better DS Get
 
 A modern, fast, and stable mobile client for Synology's Download Station, built with React Native and Expo.
+<img width="466" height="942" alt="image" src="https://github.com/user-attachments/assets/c485ba05-b264-4901-a188-9458b4797ad6" />
+
 
 ## Features
 
