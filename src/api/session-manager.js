@@ -66,6 +66,9 @@ export class SessionManager extends EventBus {
   /** @type {StoredCredentials|null} */
   #credentials = null;
 
+  /** @type {string|null} The address literally typed by the user */
+  #originalAddress = null;
+
   /** @type {ReturnType<typeof setInterval>|null} Keepalive timer ID */
   #keepaliveTimer = null;
 
@@ -112,6 +115,23 @@ export class SessionManager extends EventBus {
   }
 
   /**
+   * Get technical details about the current connection.
+   */
+  get connectionInfo() {
+    const original = this.#originalAddress || '';
+    // QuickConnect is active if the user provided a simple ID (no dots, no slashes, no colons)
+    const isQuickConnect = original.length > 0 && !original.includes('.') && !original.includes(':') && !original.includes('/') && !original.includes('http');
+
+    return {
+      baseUrl: this.#client.baseUrl,
+      originalAddress: original,
+      isHttps: this.#client.isHttps,
+      sid: this.#client.sid,
+      isQuickConnect: isQuickConnect,
+    };
+  }
+
+  /**
    * Replace Event interface with simple object structure for React Native
    */
   #emit(type, detail) {
@@ -135,6 +155,7 @@ export class SessionManager extends EventBus {
     const { otp, rememberMe = true } = options;
 
     this.#setState(ConnectionState.CONNECTING);
+    this.#originalAddress = options.originalAddress || url;
 
     try {
       // Configure client
@@ -144,7 +165,7 @@ export class SessionManager extends EventBus {
       const loginResult = await this.#client.login(account, password, { otp });
 
       // Store credentials for auto-reconnect
-      this.#credentials = { url, account, password };
+      this.#credentials = { url, account, password, originalAddress: this.#originalAddress };
 
       if (rememberMe) {
         await this.#saveCredentials();
@@ -208,6 +229,7 @@ export class SessionManager extends EventBus {
     try {
       await this.connect(saved.url, saved.account, saved.password, {
         rememberMe: true,
+        originalAddress: saved.originalAddress || saved.url,
       });
       return true;
     } catch {
@@ -339,7 +361,7 @@ export class SessionManager extends EventBus {
     this.#emit('reconnecting', { attempt: this.#reconnectAttempt });
 
     try {
-      const { url, account, password } = this.#credentials;
+      const { url, account, password, originalAddress } = this.#credentials;
       this.#client.setBaseUrl(url);
       await this.#client.login(account, password);
       this.#ds = new DownloadStation(this.#client);
@@ -364,8 +386,11 @@ export class SessionManager extends EventBus {
   async #saveCredentials() {
     if (!this.#credentials) return;
     try {
-      // Need to base64 encode or encrypt. Since btoa/atob are not guaranteed in RN:
-      const data = JSON.stringify(this.#credentials);
+      const dataToSave = {
+        ...this.#credentials,
+        originalAddress: this.#originalAddress
+      };
+      const data = JSON.stringify(dataToSave);
       await AsyncStorage.setItem(`${this.#storageKey}_creds`, data);
     } catch {
       // Ignoring storage error
@@ -417,4 +442,5 @@ export class SessionManager extends EventBus {
  * @property {string} url - NAS URL
  * @property {string} account - Username
  * @property {string} password - Password
+ * @property {string} [originalAddress] - What the user literally typed
  */

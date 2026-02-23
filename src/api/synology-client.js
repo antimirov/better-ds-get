@@ -47,6 +47,11 @@ export class SynologyClient {
         return this.#baseUrl;
     }
 
+    /** @returns {boolean} Whether the connection is over HTTPS */
+    get isHttps() {
+        return this.#baseUrl.startsWith('https://');
+    }
+
     /** @returns {boolean} Whether we have a valid session */
     get isAuthenticated() {
         return this.#sid !== null;

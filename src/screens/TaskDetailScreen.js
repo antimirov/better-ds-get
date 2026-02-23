@@ -1,5 +1,6 @@
-import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, FlatList, ActivityIndicator, Switch, TouchableOpacity, ScrollView } from 'react-native';
+import React, { useEffect, useState, useCallback } from 'react';
+import { View, Text, StyleSheet, FlatList, ActivityIndicator, Switch, TouchableOpacity, ScrollView, Alert } from 'react-native';
+import { Feather } from '@expo/vector-icons';
 import { useSynology } from '../hooks/useSynology';
 import { useNavigation } from '../hooks/useNavigation';
 
@@ -15,6 +16,7 @@ export default function TaskDetailScreen({ route }) {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
     const [activeTab, setActiveTab] = useState('General'); // General, Transfer, Tracker, Peers, Files
+    const [isActionLoading, setIsActionLoading] = useState(false);
 
     useEffect(() => {
         loadData();
@@ -152,6 +154,101 @@ export default function TaskDetailScreen({ route }) {
         return (dDisplay + hDisplay + mDisplay + sDisplay).trim() || '0s';
     };
 
+    const handlePauseTask = async () => {
+        setIsActionLoading(true);
+        try {
+            await downloadStation.pauseTasks([task.id]);
+            loadData();
+        } catch (e) {
+            Alert.alert('Error', 'Failed to pause task: ' + e.message);
+        } finally {
+            setIsActionLoading(false);
+        }
+    };
+
+    const handleResumeTask = async () => {
+        setIsActionLoading(true);
+        try {
+            await downloadStation.resumeTasks([task.id]);
+            loadData();
+        } catch (e) {
+            Alert.alert('Error', 'Failed to resume task: ' + e.message);
+        } finally {
+            setIsActionLoading(false);
+        }
+    };
+
+    const handleDeleteTask = () => {
+        Alert.alert('Remove Task', `Are you sure you want to remove "${task.title || taskInfo?.title}"?`, [
+            { text: 'Cancel', style: 'cancel' },
+            {
+                text: 'Remove',
+                style: 'destructive',
+                onPress: async () => {
+                    setIsActionLoading(true);
+                    try {
+                        await downloadStation.deleteTasks([task.id], false);
+                        goBack();
+                    } catch (e) {
+                        Alert.alert('Error', 'Failed to remove task: ' + e.message);
+                        setIsActionLoading(false);
+                    }
+                }
+            },
+            {
+                text: 'Remove & Delete Data',
+                style: 'destructive',
+                onPress: async () => {
+                    setIsActionLoading(true);
+                    try {
+                        await downloadStation.deleteTasks([task.id], true);
+                        goBack();
+                    } catch (e) {
+                        Alert.alert('Error', 'Failed to remove task and data: ' + e.message);
+                        setIsActionLoading(false);
+                    }
+                }
+            }
+        ]);
+    };
+
+    const renderActionBar = (info) => {
+        const isPaused = info.status === 'paused' || info.status === 'error';
+        const isFinished = info.status === 'finished';
+
+        return (
+            <View style={styles.actionBar}>
+                {isPaused ? (
+                    <TouchableOpacity
+                        style={[styles.actionButton, styles.resumeButton, isActionLoading && styles.buttonDisabled]}
+                        onPress={handleResumeTask}
+                        disabled={isActionLoading}
+                    >
+                        <Feather name="play" size={20} color="#FFF" />
+                        <Text style={styles.actionButtonText}>Resume</Text>
+                    </TouchableOpacity>
+                ) : !isFinished && (
+                    <TouchableOpacity
+                        style={[styles.actionButton, styles.pauseButton, isActionLoading && styles.buttonDisabled]}
+                        onPress={handlePauseTask}
+                        disabled={isActionLoading}
+                    >
+                        <Feather name="pause" size={20} color="#FFF" />
+                        <Text style={styles.actionButtonText}>Pause</Text>
+                    </TouchableOpacity>
+                )}
+                <TouchableOpacity
+                    style={[styles.actionButton, styles.deleteButton, isActionLoading && styles.buttonDisabled]}
+                    onPress={handleDeleteTask}
+                    disabled={isActionLoading}
+                >
+                    <Feather name="trash-2" size={20} color="#FFF" />
+                    <Text style={styles.actionButtonText}>Delete</Text>
+                </TouchableOpacity>
+            </View>
+        );
+    };
+
     const renderGeneralTab = (info) => (
         <View style={styles.card}>
             <View style={styles.infoRow}><Text style={styles.infoLabel}>File name:</Text><Text style={styles.infoValue}>{info.title}</Text></View>
@@ -272,15 +369,14 @@ export default function TaskDetailScreen({ route }) {
 
         const info = taskInfo || task;
 
-        return (
-            <View style={styles.contentContainer}>
-                {activeTab === 'General' && renderGeneralTab(info)}
-                {activeTab === 'Transfer' && renderTransferTab(info)}
-                {activeTab === 'Tracker' && renderTrackerTab(info)}
-                {activeTab === 'Peers' && renderPeersTab(info)}
-                {activeTab === 'File' && renderFilesTab()}
-            </View>
-        );
+        switch (activeTab) {
+            case 'General': return renderGeneralTab(info);
+            case 'Transfer': return renderTransferTab(info);
+            case 'Tracker': return renderTrackerTab(info);
+            case 'Peers': return renderPeersTab(info);
+            case 'File': return renderFilesTab();
+            default: return null;
+        }
     };
 
     return (
@@ -295,8 +391,11 @@ export default function TaskDetailScreen({ route }) {
                     </Text>
                 </View>
             </View>
+            {renderActionBar(taskInfo || task)}
             {renderTabs()}
-            {renderContent()}
+            <View style={styles.contentContainer}>
+                {renderContent()}
+            </View>
         </View>
     );
 }
@@ -448,5 +547,40 @@ const styles = StyleSheet.create({
     },
     switch: {
         transform: [{ scaleX: 0.9 }, { scaleY: 0.9 }],
+    },
+    actionBar: {
+        flexDirection: 'row',
+        padding: 16,
+        backgroundColor: '#1E1E1E',
+        borderBottomWidth: 1,
+        borderBottomColor: '#333',
+        justifyContent: 'space-between',
+    },
+    actionButton: {
+        flex: 1,
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        paddingVertical: 12,
+        borderRadius: 8,
+        marginHorizontal: 4,
+    },
+    resumeButton: {
+        backgroundColor: '#4CAF50',
+    },
+    pauseButton: {
+        backgroundColor: '#FF9800',
+    },
+    deleteButton: {
+        backgroundColor: '#FF6B6B',
+    },
+    actionButtonText: {
+        color: '#FFF',
+        fontSize: 16,
+        fontWeight: 'bold',
+        marginLeft: 8,
+    },
+    buttonDisabled: {
+        opacity: 0.5,
     }
 });

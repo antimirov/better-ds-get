@@ -168,34 +168,52 @@ export class DownloadStation {
   }
 
   /**
-   * Create a new download task from URL(s).
-   *
-   * @param {string} url - Download URL (magnet, http, ftp, etc.)
+   * Create a new download task.
+   * @param {string} url - URL or magnet link
    * @param {object} [options]
-   * @param {string} [options.destination] - Download folder path
-   * @param {string} [options.username] - Auth username for URL
-   * @param {string} [options.password] - Auth password for URL
-   * @param {string} [options.unzipPassword] - Unzip password
-   * @returns {Promise<any>}
+   * @param {string} [options.destination] - Share/folder path
+   * @param {string} [options.username]
+   * @param {string} [options.password]
+   * @param {string} [options.unzipPassword]
    */
   async createTask(url, options = {}) {
-    const params = { uri: url };
+    const cleanUrl = url.trim();
 
-    if (options.destination) params.destination = options.destination;
-    if (options.username) params.username = options.username;
-    if (options.password) params.password = options.password;
-    if (options.unzipPassword) params.unzip_password = options.unzipPassword;
-
+    // Try newer DS2 API if supported
     if (this.#client.supportsDS2) {
-      params.type = JSON.stringify('url');
-      params.url = JSON.stringify([url]);
+      const params = {};
+      // DS2 create takes 'type' as raw string and 'url' as JSON array of strings
+      params.type = 'url';
+      params.url = JSON.stringify([cleanUrl]);
+
       if (options.destination) {
+        // Destination in DS2 is also JSON stringified
         params.destination = JSON.stringify(options.destination);
       }
-      return this.#client.request('SYNO.DownloadStation2.Task', 'create', 2, params);
+      if (options.username) params.username = JSON.stringify(options.username);
+      if (options.password) params.password = JSON.stringify(options.password);
+      if (options.unzipPassword) params.unzip_password = JSON.stringify(options.unzipPassword);
+
+      try {
+        return await this.#client.request('SYNO.DownloadStation2.Task', 'create', 2, params);
+      } catch (error) {
+        // If it's a "Reserved" error (120) or unknown (100), try falling back to legacy V1 API
+        // which sometimes handles magnet/search links more reliably on some DSM versions.
+        console.warn('DS2 createTask failed, trying legacy V1 fallback:', error.message);
+        if (error.code !== 120 && error.code !== 100) {
+          throw error;
+        }
+      }
     }
 
-    return this.#client.request('SYNO.DownloadStation.Task', 'create', 1, params);
+    // Fallback to legacy SYNO.DownloadStation.Task (V1)
+    const legacyParams = { uri: cleanUrl };
+    if (options.destination) legacyParams.destination = options.destination;
+    if (options.username) legacyParams.username = options.username;
+    if (options.password) legacyParams.password = options.password;
+    if (options.unzipPassword) legacyParams.unzip_password = options.unzipPassword;
+
+    return this.#client.request('SYNO.DownloadStation.Task', 'create', 1, legacyParams);
   }
 
   /**
@@ -230,6 +248,28 @@ export class DownloadStation {
   async pauseTasks(ids) {
     return this.#client.request('SYNO.DownloadStation.Task', 'pause', 1, {
       id: ids.join(','),
+    });
+  }
+
+  /**
+   * Resume task(s).
+   * @param {string[]} ids - Task IDs
+   */
+  async resumeTasks(ids) {
+    return this.#client.request('SYNO.DownloadStation.Task', 'resume', 1, {
+      id: ids.join(','),
+    });
+  }
+
+  /**
+   * Delete task(s).
+   * @param {string[]} ids - Task IDs
+   * @param {boolean} force - If true, also delete downloaded files
+   */
+  async deleteTasks(ids, force = false) {
+    return this.#client.request('SYNO.DownloadStation.Task', 'delete', 1, {
+      id: ids.join(','),
+      force_complete: force ? 'true' : 'false',
     });
   }
 
@@ -377,6 +417,23 @@ export class DownloadStation {
       sort_by: 'seeds',
       sort_direction: 'desc',
     });
+  }
+
+  /**
+   * Stop and clean up a BT search task.
+   * @param {string} taskid - Search task ID
+   */
+  async btSearchClean(taskid) {
+    return this.#client.request('SYNO.DownloadStation.BTSearch', 'clean', 1, {
+      taskid,
+    });
+  }
+
+  /**
+   * Get available BT search modules (engines).
+   */
+  async btSearchGetModules() {
+    return this.#client.request('SYNO.DownloadStation.BTSearch', 'getModule', 1);
   }
 
   // ── Helpers ──────────────────────────────────────────────────

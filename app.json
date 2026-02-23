@@ -43,7 +43,8 @@
             "usesCleartextTraffic": true
           }
         }
-      ]
+      ],
+      "./plugins/withNetworkSecurityConfig.js"
     ]
   }
 }
