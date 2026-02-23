@@ -1,30 +1,41 @@
 # Better DS Get
 
 A modern, fast, and stable mobile client for Synology's Download Station, built with React Native and Expo.
+
 <img width="466" alt="Better DS Get Preview" src="./docs/images/v1.0.0.jpeg" />
 
+## Why "Better"?
+
+Original Synology "DS Get" app suffered from several issues:
+- **Connectivity**: Frequent logouts and session timeouts.
+- **Search**: For search prompts that were too broad, the app would just log you out, breaking the search flow.
 
 ## Features
 
-- **Connect to your Synology NAS**: Supports generic DSM connections and custom API configurations.
-- **Manage Download Tasks**: View, pause, resume, and delete tasks easily.
-- **Add New Tasks**: Add downloads via standard URLs, Magnet links, or by uploading `.torrent` files directly from your phone.
+- **Connect to your Synology NAS**: Supports generic DSM connections to local network using HTTPS and HTTP, and **QuickConnect IDs**.
+- **Integrated BT Search**: Search directly from the app using all search engines configured on your NAS. Results are persistent and update in the background.
+- **Manage Download Tasks**: View, pause, resume, and delete tasks with real-time progress updates.
+- **Add New Tasks**: 
+  - One-tap addition from search results.
+  - Submit Magnet links / URLs.
+  - Upload `.torrent` files directly from your phone
 - **View Task Details**: Browse files inside BitTorrent tasks, check transfer speeds, and set file priorities (skip/unskip files).
-- **Modify Settings**: Change your default download destination right from the app.
-- **Stable Background Session**: Built-in automatic keep-alive mechanisms to prevent annoying session timeouts.
+- **Technical Transparency**: Use the "Connection Info" overlay to see resolved IPs, protocol security, API counts, and session status.
+- **Smart Persistence**: Remembers your URL, account, and **password** for instant re-logging. Supports "Soft Logout" to switch accounts without wiping settings.
+- **Stable Background Session**: Periodic NAS pings keep your session alive for as long as you need.
 
 ## Getting Started
 
 ### Prerequisites
 - Node.js LTS
 - Yarn or npm
-- Expo Go app on your iOS/Android device (or an emulator)
+- Expo Go app on your device (or an emulator)
 
 ### Installation
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/your-username/better_ds_get.git
+   git clone https://github.com/antimirov/better_ds_get.git
    cd better_ds_get
    ```
 
@@ -42,10 +53,11 @@ A modern, fast, and stable mobile client for Synology's Download Station, built 
 
 ## Roadmap
 
-- Implement torrent searching using configured search engines from the Download Station WebUI.
-- Polishing UI and themes.
-- Support for selecting individual files when adding a new torrent.
-- Build a standalone `.apk` file for production release.
+- [x] Implement torrent searching using configured engines.
+- [x] Support for QuickConnect and HTTPS.
+- [x] Individual file priority management.
+- [ ] Support for selecting individual files *before* adding a new torrent.
+- [ ] Build a standalone `.apk` file for production release.
 
 ## License
 
