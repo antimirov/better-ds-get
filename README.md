@@ -4,6 +4,8 @@ A modern, fast, and stable mobile client for Synology's Download Station, built 
 
 <img width="466" alt="Better DS Get Preview" src="./docs/images/v1.0.0.jpeg" />
 
+[View Changelog](./CHANGELOG.md)
+
 ## Why "Better"?
 
 Original Synology "DS Get" app suffered from several issues:
@@ -56,8 +58,10 @@ Original Synology "DS Get" app suffered from several issues:
 - [x] Implement torrent searching using configured engines.
 - [x] Support for QuickConnect and HTTPS.
 - [x] Individual file priority management.
+- [x] **v1.1.0 Release** (Search, QuickConnect, Password Persistence).
 - [ ] Support for selecting individual files *before* adding a new torrent.
-- [ ] Build a standalone `.apk` file for production release.
+- [ ] Build a standalone `.apk` file for official release.
+- [ ] Add a checkbox "Remember me" to the login screen. If checked, the app will remember the login credentials and will not ask for them again.
 
 ## License
 
