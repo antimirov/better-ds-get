@@ -21,6 +21,7 @@ export default function TaskListScreen() {
 
     // Settings Modal state
     const [isSettingsModalVisible, setSettingsModalVisible] = useState(false);
+    const [isInfoModalVisible, setInfoModalVisible] = useState(false);
     const [isActionLoading, setIsActionLoading] = useState(false);
 
     // Folder Picker Modal state
@@ -147,7 +148,7 @@ export default function TaskListScreen() {
                 style: 'destructive',
                 onPress: () => {
                     setSettingsModalVisible(false);
-                    sessionManager.disconnect(true);
+                    sessionManager.disconnect(false);
                 }
             }
         ]);
@@ -258,6 +259,67 @@ export default function TaskListScreen() {
             default:
                 return styles.statusPaused;
         }
+    };
+
+    const renderInfoModal = () => {
+        const info = sessionManager.connectionInfo;
+        const maskSid = (sid) => sid ? `${sid.substring(0, 4)}...${sid.substring(sid.length - 4)}` : 'N/A';
+
+        return (
+            <Modal visible={isInfoModalVisible} transparent={true} animationType="fade">
+                <View style={styles.modalOverlay}>
+                    <View style={styles.settingsModalContent}>
+                        <Text style={styles.settingsModalTitle}>Connection Details</Text>
+
+                        <View style={styles.infoRowStat}>
+                            <Text style={styles.infoLabel}>Account</Text>
+                            <Text style={styles.infoValue}>{sessionManager.credentials?.account || 'Unknown'}</Text>
+                        </View>
+
+                        {info.originalAddress && info.originalAddress !== info.baseUrl && (
+                            <View style={styles.infoRowColumn}>
+                                <Text style={styles.infoLabel}>Address You Typed</Text>
+                                <Text style={styles.infoValueLeft}>{info.originalAddress}</Text>
+                            </View>
+                        )}
+
+                        <View style={styles.infoRowColumn}>
+                            <Text style={styles.infoLabel}>Resolved NAS Address</Text>
+                            <Text style={styles.infoValueLeft}>{info.baseUrl || 'N/A'}</Text>
+                        </View>
+
+                        <View style={styles.infoRowStat}>
+                            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                                <Text style={styles.infoLabel}>QuickConnect Relay</Text>
+                                {info.isQuickConnect && <View style={styles.activeDot} />}
+                            </View>
+                            <Text style={[styles.infoValue, { color: info.isQuickConnect ? '#4CAF50' : '#888' }]}>
+                                {info.isQuickConnect ? 'ACTIVE' : 'NO'}
+                            </Text>
+                        </View>
+
+                        <View style={styles.infoRowStat}>
+                            <Text style={styles.infoLabel}>Encryption (SSL)</Text>
+                            <Text style={[styles.infoValue, { color: info.isHttps ? '#4CAF50' : '#FF9800' }]}>
+                                {info.isHttps ? 'HTTPS / SECURE' : 'HTTP / INSECURE'}
+                            </Text>
+                        </View>
+
+                        <View style={styles.infoRowStat}>
+                            <Text style={styles.infoLabel}>Session ID</Text>
+                            <Text style={styles.infoValue}>{maskSid(info.sid)}</Text>
+                        </View>
+
+                        <TouchableOpacity
+                            style={styles.settingsCloseButton}
+                            onPress={() => setInfoModalVisible(false)}
+                        >
+                            <Text style={styles.settingsCloseText}>Close</Text>
+                        </TouchableOpacity>
+                    </View>
+                </View>
+            </Modal>
+        );
     };
 
     const renderTask = ({ item }) => {
@@ -372,6 +434,15 @@ export default function TaskListScreen() {
                         <View style={styles.settingsUserInfo}>
                             <Feather name="user" size={16} color="#888" style={{ marginRight: 8 }} />
                             <Text style={styles.settingsUserText}>Logged in as: {sessionManager.credentials?.account || 'Unknown'}</Text>
+                            <TouchableOpacity
+                                style={{ marginLeft: 'auto', padding: 4 }}
+                                onPress={() => {
+                                    setSettingsModalVisible(false);
+                                    setInfoModalVisible(true);
+                                }}
+                            >
+                                <Feather name="info" size={20} color="#00A1E4" />
+                            </TouchableOpacity>
                         </View>
 
                         <View style={styles.settingsDivider} />
@@ -428,6 +499,8 @@ export default function TaskListScreen() {
                     </View>
                 </View>
             </Modal>
+
+            {renderInfoModal()}
 
             {/* Folder Picker Modal */}
             <Modal visible={isFolderModalVisible} transparent={true} animationType="slide">
@@ -765,5 +838,42 @@ const styles = StyleSheet.create({
         marginBottom: 16,
         fontSize: 13,
         lineHeight: 18,
+    },
+    infoRowStat: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        paddingVertical: 12,
+        borderBottomWidth: 1,
+        borderBottomColor: '#333',
+        alignItems: 'center',
+    },
+    infoRowColumn: {
+        paddingVertical: 12,
+        borderBottomWidth: 1,
+        borderBottomColor: '#333',
+    },
+    infoLabel: {
+        color: '#888',
+        fontSize: 13,
+        fontWeight: '600',
+    },
+    infoValue: {
+        color: '#E0E0E0',
+        fontSize: 13,
+        fontWeight: '500',
+        textAlign: 'right',
+    },
+    infoValueLeft: {
+        color: '#E0E0E0',
+        fontSize: 12, // Slightly smaller for long URLs
+        marginTop: 4,
+        fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+    },
+    activeDot: {
+        width: 8,
+        height: 8,
+        borderRadius: 4,
+        backgroundColor: '#4CAF50',
+        marginLeft: 8,
     }
 });

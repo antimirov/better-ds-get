@@ -3,6 +3,7 @@ import { View, Text, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator,
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useSynology } from '../hooks/useSynology';
 import { ConnectionState } from '../api/session-manager';
+import { resolveQuickConnect } from '../api/quickconnect';
 
 export default function LoginScreen() {
     const { sessionManager, connectionState } = useSynology();
@@ -10,14 +11,17 @@ export default function LoginScreen() {
     const [account, setAccount] = useState('');
     const [password, setPassword] = useState('');
     const [otp, setOtp] = useState('');
+    const [resolvingQC, setResolvingQC] = useState(false);
 
     useEffect(() => {
         const loadSavedInput = async () => {
             try {
                 const savedUrl = await AsyncStorage.getItem('saved_login_url');
                 const savedAccount = await AsyncStorage.getItem('saved_login_account');
+                const savedPassword = await AsyncStorage.getItem('saved_login_password');
                 if (savedUrl) setUrl(savedUrl);
                 if (savedAccount) setAccount(savedAccount);
+                if (savedPassword) setPassword(savedPassword);
             } catch (e) {
                 // Ignore storage errors
             }
@@ -31,9 +35,14 @@ export default function LoginScreen() {
             return;
         }
 
-        // Ensure URL has protocol
+        // Ensure URL has protocol or handle QuickConnect
         let formattedUrl = url.trim();
-        if (!/^https?:\/\//i.test(formattedUrl)) {
+        let isQuickConnect = false;
+
+        // QuickConnect IDs don't have periods or colons, and aren't IP addresses or standard domains
+        if (!formattedUrl.includes('.') && !formattedUrl.includes(':') && !formattedUrl.includes('http')) {
+            isQuickConnect = true;
+        } else if (!/^https?:\/\//i.test(formattedUrl)) {
             if (formattedUrl.includes(':5001')) {
                 formattedUrl = 'https://' + formattedUrl;
             } else {
@@ -44,14 +53,27 @@ export default function LoginScreen() {
         try {
             await AsyncStorage.setItem('saved_login_url', url); // Save what they literally typed
             await AsyncStorage.setItem('saved_login_account', account);
+            await AsyncStorage.setItem('saved_login_password', password);
 
-            await sessionManager.connect(formattedUrl, account, password, { otp: otp.trim() || undefined });
+            let finalUrl = formattedUrl;
+
+            if (isQuickConnect) {
+                setResolvingQC(true);
+                finalUrl = await resolveQuickConnect(formattedUrl);
+                setResolvingQC(false);
+            }
+
+            await sessionManager.connect(finalUrl, account, password, {
+                otp: otp.trim() || undefined,
+                originalAddress: url.trim()
+            });
         } catch (error) {
+            setResolvingQC(false);
             Alert.alert('Login Failed', error.message || 'Unknown error occurred');
         }
     };
 
-    const isConnecting = connectionState === ConnectionState.CONNECTING;
+    const isConnecting = connectionState === ConnectionState.CONNECTING || resolvingQC;
 
     return (
         <KeyboardAvoidingView
@@ -114,7 +136,10 @@ export default function LoginScreen() {
                     disabled={isConnecting}
                 >
                     {isConnecting ? (
-                        <ActivityIndicator color="#FFFFFF" />
+                        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                            <ActivityIndicator color="#FFFFFF" style={{ marginRight: 8 }} />
+                            <Text style={styles.buttonText}>{resolvingQC ? 'Resolving QuickConnect...' : 'Connecting...'}</Text>
+                        </View>
                     ) : (
                         <Text style={styles.buttonText}>Connect to NAS</Text>
                     )}

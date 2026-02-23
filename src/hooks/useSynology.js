@@ -9,6 +9,7 @@ const SynologyContext = createContext({
     connectionState: ConnectionState.DISCONNECTED,
     isConnected: false,
     error: null,
+    isInitializing: true,
 });
 
 export const SynologyProvider = ({ children }) => {

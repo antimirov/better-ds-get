@@ -2,9 +2,9 @@ import React, { createContext, useContext, useState, ReactNode, useEffect } from
 import { BackHandler } from 'react-native';
 
 export type NavigationContextType = {
-    currentScreen: 'Login' | 'TaskList' | 'TaskDetail';
+    currentScreen: 'Login' | 'TaskList' | 'TaskDetail' | 'Search';
     params: any;
-    navigate: (screen: 'Login' | 'TaskList' | 'TaskDetail', params?: any) => void;
+    navigate: (screen: 'Login' | 'TaskList' | 'TaskDetail' | 'Search', params?: any) => void;
     goBack: () => void;
 };
 
@@ -17,13 +17,13 @@ export const useNavigation = () => {
 };
 
 export const NavigationProvider = ({ children }: { children: ReactNode }) => {
-    const [history, setHistory] = useState<{ screen: 'Login' | 'TaskList' | 'TaskDetail', params: any }[]>([
+    const [history, setHistory] = useState<{ screen: 'Login' | 'TaskList' | 'TaskDetail' | 'Search', params: any }[]>([
         { screen: 'Login', params: null }
     ]);
 
     const current = history[history.length - 1];
 
-    const navigate = (screen: 'Login' | 'TaskList' | 'TaskDetail', params?: any) => {
+    const navigate = (screen: 'Login' | 'TaskList' | 'TaskDetail' | 'Search', params?: any) => {
         setHistory(prev => [...prev, { screen, params }]);
     };
 
