@@ -61,6 +61,7 @@ Original Synology "DS Get" app suffered from several issues:
 - [x] **v1.1.0 Release** (Search, QuickConnect, Password Persistence).
 - [ ] Support for selecting destination directory before adding a new torrent
 - [ ] Support for selecting individual files *before* adding a new torrent.
+- [ ] Add progress bar to each download item in the main window. 
 - [ ] Add country flags to peers based on IP geolocation
 - [ ] Build a standalone `.apk` file for official release.
 - [ ] Add a checkbox "Remember me" to the login screen. If checked, the app will remember the login credentials and will not ask for them again.
