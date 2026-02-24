@@ -2,7 +2,7 @@
   "expo": {
     "name": "Better DS Get",
     "slug": "better-ds-get",
-    "version": "1.0.0",
+    "version": "1.2.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -23,6 +23,7 @@
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
       "package": "com.antimirov.betterdsget",
+      "versionCode": 3,
       "permissions": [
         "INTERNET",
         "READ_EXTERNAL_STORAGE",

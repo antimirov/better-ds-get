@@ -38,3 +38,5 @@ secrets.txt
 # generated native folders
 /ios
 /android
+/builds/
+application-*.apk

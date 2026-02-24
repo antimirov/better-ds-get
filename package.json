@@ -1,6 +1,6 @@
 {
   "name": "better-ds-get",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "main": "index.ts",
   "scripts": {
     "start": "expo start",
@@ -20,6 +20,7 @@
     "node-fetch": "^3.3.2",
     "react": "19.1.0",
     "react-native": "0.81.5",
+    "react-native-safe-area-context": "~5.6.0",
     "syno": "^3.0.0"
   },
   "devDependencies": {

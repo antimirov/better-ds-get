@@ -1,5 +1,6 @@
 import React, { useEffect } from 'react';
-import { View, Text, ActivityIndicator, StyleSheet, SafeAreaView, StatusBar, BackHandler, TouchableOpacity } from 'react-native';
+import { View, Text, ActivityIndicator, StyleSheet, StatusBar, BackHandler, TouchableOpacity } from 'react-native';
+import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { SynologyProvider, useSynology } from './src/hooks/useSynology';
 import { NavigationProvider, useNavigation } from './src/hooks/useNavigation';
 import { SearchProvider } from './src/hooks/useSearch';
@@ -76,16 +77,18 @@ const MainApp = () => {
 
 export default function App() {
   return (
-    <SafeAreaView style={styles.container}>
-      <StatusBar barStyle="light-content" backgroundColor="#121212" />
-      <SynologyProvider>
-        <SearchProvider>
-          <NavigationProvider>
-            <MainApp />
-          </NavigationProvider>
-        </SearchProvider>
-      </SynologyProvider>
-    </SafeAreaView>
+    <SafeAreaProvider>
+      <SafeAreaView style={styles.container} edges={['top', 'right', 'left']}>
+        <StatusBar barStyle="light-content" backgroundColor="#121212" />
+        <SynologyProvider>
+          <SearchProvider>
+            <NavigationProvider>
+              <MainApp />
+            </NavigationProvider>
+          </SearchProvider>
+        </SynologyProvider>
+      </SafeAreaView>
+    </SafeAreaProvider>
   );
 }
 
