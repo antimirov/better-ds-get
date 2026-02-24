@@ -5,6 +5,9 @@ import * as DocumentPicker from 'expo-document-picker';
 import { useSynology } from '../hooks/useSynology';
 import { ConnectionState } from '../api/session-manager';
 import { useNavigation } from '../hooks/useNavigation';
+import FileSelectionModal from '../components/FileSelectionModal';
+import FolderPickerModal from '../components/FolderPickerModal';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 export default function TaskListScreen() {
     const { sessionManager, connectionState } = useSynology();
@@ -24,12 +27,17 @@ export default function TaskListScreen() {
     const [isInfoModalVisible, setInfoModalVisible] = useState(false);
     const [isActionLoading, setIsActionLoading] = useState(false);
 
-    // Folder Picker Modal state
-    const [isFolderModalVisible, setFolderModalVisible] = useState(false);
-    const [folderItems, setFolderItems] = useState([]);
-    const [isFetchingFolders, setIsFetchingFolders] = useState(false);
-    const [currentFolderPath, setCurrentFolderPath] = useState('');
-    const [currentDefaultFolder, setCurrentDefaultFolder] = useState('');
+    // Folder Picker State
+    const [isFolderModalVisible, setFolderModalVisible] = React.useState(false);
+    const [folderPickerMode, setFolderPickerMode] = React.useState('default'); // 'default' or 'addTask'
+    const [currentDefaultFolder, setCurrentDefaultFolder] = React.useState('');
+    const [selectedAddFolder, setSelectedAddFolder] = React.useState('');
+
+    // File Selection state
+    const [selectionModalVisible, setSelectionModalVisible] = useState(false);
+    const [pendingFiles, setPendingFiles] = useState([]);
+    const [pendingListId, setPendingListId] = useState(null);
+    const [isConfirmingFiles, setIsConfirmingFiles] = useState(false);
 
     const fetchTasks = useCallback(async () => {
         if (!sessionManager.ds) return;
@@ -51,15 +59,6 @@ export default function TaskListScreen() {
                 // Ignore stats fetch failure
             }
 
-            // Also fetch config for default destination
-            try {
-                const config = await sessionManager.execute(() => sessionManager.ds.getConfig());
-                if (config && config.default_destination) {
-                    setCurrentDefaultFolder(config.default_destination);
-                }
-            } catch (e) {
-                // Ignore config fetch failure
-            }
         } catch (error) {
             // The session manager handles transient errors and logic.
             // If it throws here, it's a permanent network error we should show briefly.
@@ -69,6 +68,25 @@ export default function TaskListScreen() {
             setRefreshing(false);
         }
     }, [sessionManager]);
+
+    // Fetch default destination once on connect
+    useEffect(() => {
+        const fetchConfig = async () => {
+            try {
+                const config = await sessionManager.execute(() => sessionManager.ds.getConfig());
+                if (config && config.default_destination) {
+                    setCurrentDefaultFolder(config.default_destination);
+                    setSelectedAddFolder(prev => prev ? prev : config.default_destination);
+                }
+            } catch (e) {
+                console.warn('Failed to fetch default destination:', e);
+            }
+        };
+
+        if (sessionManager.isConnected) {
+            fetchConfig();
+        }
+    }, [sessionManager.connectionState]);
 
     // Polling loop
     useEffect(() => {
@@ -90,11 +108,24 @@ export default function TaskListScreen() {
 
         setIsAdding(true);
         try {
-            await sessionManager.execute(() => sessionManager.ds.createTask(newTaskUrl.trim()));
+            const result = await sessionManager.execute(() => sessionManager.ds.createTask(newTaskUrl.trim(), {
+                destination: selectedAddFolder,
+                createList: true
+            }));
+
             setNewTaskUrl('');
             setAddModalVisible(false);
-            Alert.alert('Success', 'Task added successfully');
-            fetchTasks(); // refresh list
+
+            if (result.list_id && result.list_id.length > 0) {
+                const listId = result.list_id[0];
+                const files = await sessionManager.ds.getFileList(listId);
+                setPendingListId(listId);
+                setPendingFiles(files);
+                setSelectionModalVisible(true);
+            } else {
+                Alert.alert('Success', 'Task added successfully');
+                fetchTasks(); // refresh list
+            }
         } catch (error) {
             Alert.alert('Error', 'Failed to add task: ' + error.message);
         } finally {
@@ -128,15 +159,47 @@ export default function TaskListScreen() {
                 rnFile.type = 'application/x-bittorrent';
             }
 
+            const uploadResult = await sessionManager.execute(() => sessionManager.ds.createTaskFromFile(rnFile, {
+                destination: selectedAddFolder,
+                createList: true
+            }));
 
-            await sessionManager.execute(() => sessionManager.ds.createTaskFromFile(rnFile));
             setAddModalVisible(false);
-            Alert.alert('Success', 'Torrent file uploaded successfully');
-            fetchTasks(); // refresh list
+
+            if (uploadResult.list_id && uploadResult.list_id.length > 0) {
+                const listId = uploadResult.list_id[0];
+                const files = await sessionManager.ds.getFileList(listId);
+                setPendingListId(listId);
+                setPendingFiles(files);
+                setSelectionModalVisible(true);
+            } else {
+                Alert.alert('Success', 'Torrent file uploaded successfully');
+                fetchTasks(); // refresh list
+            }
         } catch (error) {
             Alert.alert('Error', 'Failed to upload torrent: ' + error.message);
         } finally {
             setIsAdding(false);
+        }
+    };
+
+    const handleConfirmSelection = async ({ wanted, unwanted }) => {
+        setIsConfirmingFiles(true);
+        try {
+            // Finalize task creation with selected files
+            await sessionManager.execute(() => sessionManager.ds.createTask('', {
+                listId: pendingListId,
+                selectedIndices: wanted,
+                destination: selectedAddFolder
+            }));
+
+            setSelectionModalVisible(false);
+            Alert.alert('Success', 'Download started with selected files');
+            fetchTasks();
+        } catch (error) {
+            Alert.alert('Error', 'Failed to finalize selection: ' + error.message);
+        } finally {
+            setIsConfirmingFiles(false);
         }
     };
 
@@ -198,36 +261,25 @@ export default function TaskListScreen() {
         ]);
     };
 
-    const loadFolders = async (path = '') => {
-        setIsFetchingFolders(true);
-        setCurrentFolderPath(path);
-        try {
-            const list = await sessionManager.execute(() => sessionManager.ds.listFolders(path));
-            setFolderItems(list);
-        } catch (error) {
-            Alert.alert('Error', 'Failed to fetch folders: ' + error.message);
-        } finally {
-            setIsFetchingFolders(false);
-        }
-    };
-
-    const handleOpenFolderModal = () => {
+    const handleOpenFolderModal = (mode = 'default') => {
+        setFolderPickerMode(mode);
         setFolderModalVisible(true);
-        loadFolders('');
     };
 
-    const handleSelectCurrentFolder = async () => {
-        if (!currentFolderPath) {
-            Alert.alert('Error', 'Please navigate into a valid destination folder first.');
+    const handleSelectFolder = async (path) => {
+        if (folderPickerMode === 'addTask') {
+            setSelectedAddFolder(path);
+            setFolderModalVisible(false);
             return;
         }
+
         setIsActionLoading(true);
         try {
             // SYNO.DownloadStation2.Settings.Location expects the path WITHOUT a leading slash
-            const formattedPath = currentFolderPath.startsWith('/') ? currentFolderPath.substring(1) : currentFolderPath;
+            const formattedPath = path.startsWith('/') ? path.substring(1) : path;
             await sessionManager.execute(() => sessionManager.ds.setConfig({ default_destination: formattedPath }));
             setCurrentDefaultFolder(formattedPath);
-            Alert.alert('Success', `Default download folder changed to: ${currentFolderPath}`);
+            Alert.alert('Success', `Default download folder changed to: ${path}`);
             setFolderModalVisible(false);
             setSettingsModalVisible(false);
         } catch (error) {
@@ -266,7 +318,12 @@ export default function TaskListScreen() {
         const maskSid = (sid) => sid ? `${sid.substring(0, 4)}...${sid.substring(sid.length - 4)}` : 'N/A';
 
         return (
-            <Modal visible={isInfoModalVisible} transparent={true} animationType="fade">
+            <Modal
+                visible={isInfoModalVisible}
+                transparent={true}
+                animationType="fade"
+                onRequestClose={() => setInfoModalVisible(false)}
+            >
                 <View style={styles.modalOverlay}>
                     <View style={styles.settingsModalContent}>
                         <Text style={styles.settingsModalTitle}>Connection Details</Text>
@@ -346,6 +403,9 @@ export default function TaskListScreen() {
                     </Text>
                 </View>
                 <View style={styles.taskFooter}>
+                    <View style={styles.progressContainer}>
+                        <View style={[styles.progressBar, { width: progressText, backgroundColor: getStatusStyle(item.status).color || '#00A1E4' }]} />
+                    </View>
                     {isDownloading && (
                         <Text style={styles.taskSpeed}>
                             ↓ {formatBytes(item.speedDownload)}/s  ↑ {formatBytes(item.speedUpload)}/s
@@ -359,11 +419,11 @@ export default function TaskListScreen() {
     return (
         <View style={styles.container}>
             <View style={styles.header}>
-                <View>
+                <View style={styles.headerContent}>
                     <Text style={styles.headerTitle}>Downloads: {tasks.length}</Text>
-                    <Text style={styles.headerSubtitle}>
-                        {connectionState === ConnectionState.RECONNECTING ? 'Reconnecting...' :
-                            `↓ ${formatBytes(stats.speedDownload)}/s  ↑ ${formatBytes(stats.speedUpload)}/s`}
+                    <Text style={styles.headerStats}>
+                        {connectionState === ConnectionState.RECONNECTING ? '  Reconnecting...' :
+                            `  ↓ ${formatBytes(stats.speedDownload)}/s  ↑ ${formatBytes(stats.speedUpload)}/s`}
                     </Text>
                 </View>
                 <TouchableOpacity onPress={() => setSettingsModalVisible(true)} style={styles.settingsButton}>
@@ -392,7 +452,12 @@ export default function TaskListScreen() {
             </TouchableOpacity>
 
             {/* Add Task Modal */}
-            <Modal visible={isAddModalVisible} transparent={true} animationType="slide">
+            <Modal
+                visible={isAddModalVisible}
+                transparent={true}
+                animationType="slide"
+                onRequestClose={() => setAddModalVisible(false)}
+            >
                 <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.modalContainer}>
                     <View style={styles.modalContent}>
                         <Text style={styles.modalTitle}>Add New Task</Text>
@@ -412,6 +477,17 @@ export default function TaskListScreen() {
                             {isAdding ? <ActivityIndicator color="#FFF" /> : <Text style={styles.modalButtonText}>Download from URL</Text>}
                         </TouchableOpacity>
 
+                        <Text style={styles.modalLabel}>Download Destination</Text>
+                        <TouchableOpacity
+                            style={styles.input}
+                            onPress={() => handleOpenFolderModal('addTask')}
+                            disabled={isAdding}
+                        >
+                            <Text style={{ color: selectedAddFolder ? '#FFF' : '#666' }}>
+                                {selectedAddFolder || 'Select Folder...'}
+                            </Text>
+                        </TouchableOpacity>
+
                         <View style={styles.divider} />
 
                         <TouchableOpacity style={[styles.modalButton, styles.secondaryButton, isAdding && styles.buttonDisabled]} onPress={handleAddTorrentFile} disabled={isAdding}>
@@ -426,7 +502,12 @@ export default function TaskListScreen() {
             </Modal>
 
             {/* Settings / Actions Modal */}
-            <Modal visible={isSettingsModalVisible} transparent={true} animationType="fade">
+            <Modal
+                visible={isSettingsModalVisible}
+                transparent={true}
+                animationType="fade"
+                onRequestClose={() => setSettingsModalVisible(false)}
+            >
                 <View style={styles.modalOverlay}>
                     <View style={styles.settingsModalContent}>
                         <Text style={styles.settingsModalTitle}>Settings & Actions</Text>
@@ -502,82 +583,22 @@ export default function TaskListScreen() {
 
             {renderInfoModal()}
 
+            <FileSelectionModal
+                visible={selectionModalVisible}
+                files={pendingFiles}
+                isConfirming={isConfirmingFiles}
+                onConfirm={handleConfirmSelection}
+                onCancel={() => setSelectionModalVisible(false)}
+            />
+
             {/* Folder Picker Modal */}
-            <Modal visible={isFolderModalVisible} transparent={true} animationType="slide">
-                <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.modalContainer}>
-                    <View style={[styles.modalContent, { maxHeight: '80%' }]}>
-                        <Text style={styles.modalTitle}>Select Download Folder</Text>
-                        <Text style={styles.currentPathText} numberOfLines={2} ellipsizeMode="middle">
-                            {currentFolderPath
-                                ? `Path: /${currentFolderPath}`
-                                : (currentDefaultFolder ? `Current default: ${currentDefaultFolder}\nSelect a share to navigate:` : 'Root (Select a share first)')}
-                        </Text>
-
-                        {isFetchingFolders ? (
-                            <ActivityIndicator size="large" color="#00A1E4" style={{ marginVertical: 20 }} />
-                        ) : (
-                            <FlatList
-                                data={folderItems}
-                                keyExtractor={(item) => item.path}
-                                contentContainerStyle={{ paddingBottom: 20 }}
-                                ListEmptyComponent={<Text style={styles.emptyText}>No folders found.</Text>}
-                                ListHeaderComponent={() => {
-                                    if (!currentFolderPath) return null;
-                                    return (
-                                        <TouchableOpacity
-                                            style={styles.folderRow}
-                                            onPress={() => {
-                                                const parts = currentFolderPath.split('/');
-                                                parts.pop(); // remove last part
-                                                const parent = parts.join('/');
-                                                loadFolders(parent === '' ? '' : parent); // if empty, go to root
-                                            }}
-                                            disabled={isActionLoading}
-                                        >
-                                            <Feather name="corner-left-up" size={24} color="#666" style={{ marginRight: 12 }} />
-                                            <View style={{ flex: 1 }}>
-                                                <Text style={[styles.folderName, { color: '#666' }]}>..</Text>
-                                                <Text style={styles.folderPath}>Go up</Text>
-                                            </View>
-                                        </TouchableOpacity>
-                                    );
-                                }}
-                                renderItem={({ item }) => (
-                                    <TouchableOpacity
-                                        style={styles.folderRow}
-                                        onPress={() => loadFolders(item.path)}
-                                        disabled={isActionLoading}
-                                    >
-                                        <Feather name="folder" size={24} color="#00A1E4" style={{ marginRight: 12 }} />
-                                        <View style={{ flex: 1 }}>
-                                            <Text style={styles.folderName} numberOfLines={1} ellipsizeMode="tail">{item.name}</Text>
-                                            <Text style={styles.folderPath} numberOfLines={1} ellipsizeMode="middle">{item.path}</Text>
-                                        </View>
-                                    </TouchableOpacity>
-                                )}
-                            />
-                        )}
-
-                        {!!currentFolderPath && (
-                            <TouchableOpacity
-                                style={[styles.modalButton, { marginBottom: 8, marginTop: 8 }]}
-                                onPress={handleSelectCurrentFolder}
-                                disabled={isActionLoading}
-                            >
-                                <Text style={styles.modalButtonText}>Set "{currentFolderPath.split('/').pop() || currentFolderPath}" as Default</Text>
-                            </TouchableOpacity>
-                        )}
-
-                        <TouchableOpacity
-                            style={[styles.closeModalButton, { marginTop: 0 }]}
-                            onPress={() => setFolderModalVisible(false)}
-                            disabled={isActionLoading}
-                        >
-                            <Text style={styles.closeModalText}>Cancel</Text>
-                        </TouchableOpacity>
-                    </View>
-                </KeyboardAvoidingView>
-            </Modal>
+            <FolderPickerModal
+                visible={isFolderModalVisible}
+                onClose={() => setFolderModalVisible(false)}
+                onSelect={handleSelectFolder}
+                currentDefaultFolder={currentDefaultFolder}
+                title={folderPickerMode === 'addTask' ? 'Select Destination' : 'Set Default Folder'}
+            />
         </View>
     );
 }
@@ -588,8 +609,9 @@ const styles = StyleSheet.create({
         backgroundColor: '#121212',
     },
     header: {
-        padding: 20,
-        paddingTop: 60, // Safe area approx
+        paddingHorizontal: 20,
+        paddingBottom: 16,
+        paddingTop: 12,
         backgroundColor: '#1E1E1E',
         flexDirection: 'row',
         justifyContent: 'space-between',
@@ -597,10 +619,19 @@ const styles = StyleSheet.create({
         borderBottomWidth: 1,
         borderBottomColor: '#333',
     },
+    headerContent: {
+        flexDirection: 'row',
+        alignItems: 'baseline',
+    },
     headerTitle: {
-        fontSize: 24,
+        fontSize: 18, // Slightly smaller to fit on one line
         fontWeight: 'bold',
         color: '#00A1E4',
+    },
+    headerStats: {
+        fontSize: 12,
+        color: '#888',
+        marginLeft: 16, // Increased from 4
     },
     headerSubtitle: {
         fontSize: 14,
@@ -683,6 +714,20 @@ const styles = StyleSheet.create({
     taskSpeed: {
         color: '#888',
         fontSize: 12,
+        marginTop: 4,
+    },
+    progressContainer: {
+        height: 6,
+        backgroundColor: '#333',
+        borderRadius: 3,
+        flex: 1,
+        marginRight: 10,
+        overflow: 'hidden',
+        alignSelf: 'center',
+    },
+    progressBar: {
+        height: '100%',
+        borderRadius: 3,
     },
     emptyText: {
         color: '#666',

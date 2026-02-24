@@ -16,12 +16,15 @@ Original Synology "DS Get" app suffered from several issues:
 
 - **Connect to your Synology NAS**: Supports generic DSM connections to local network using HTTPS and HTTP, and **QuickConnect IDs**.
 - **Integrated BT Search**: Search directly from the app using all search engines configured on your NAS. Results are persistent and update in the background.
-- **Manage Download Tasks**: View, pause, resume, and delete tasks with real-time progress updates.
+- **Manage Download Tasks**: View, pause, resume, and delete tasks with **real-time progress updates** (5s auto-refresh on detail screen).
 - **Add New Tasks**: 
   - One-tap addition from search results.
   - Submit Magnet links / URLs.
-  - Upload `.torrent` files directly from your phone
-- **View Task Details**: Browse files inside BitTorrent tasks, check transfer speeds, and set file priorities (skip/unskip files).
+  - Upload `.torrent` files directly from your phone.
+  - **Dynamic Destination Selection**: Choose specific download folders and use **Recent Folders** for 1-tap quick access.
+  - **Selective Download**: Choose individual files *before* adding a torrent to the queue.
+- **View Task Details**: Browse files inside BitTorrent tasks, check transfer speeds, **Time Left (ETA)**, and set file priorities (skip/unskip files).
+- **Advanced Tracker Info**: Expose tracker geolocation flags, protocol security badges (UDP/HTTPS/HTTP), and performance metrics.
 - **Technical Transparency**: Use the "Connection Info" overlay to see resolved IPs, protocol security, API counts, and session status.
 - **Smart Persistence**: Remembers your URL, account, and **password** for instant re-logging. Supports "Soft Logout" to switch accounts without wiping settings.
 - **Stable Background Session**: Periodic NAS pings keep your session alive for as long as you need.
@@ -59,10 +62,11 @@ Original Synology "DS Get" app suffered from several issues:
 - [x] Support for QuickConnect and HTTPS.
 - [x] Individual file priority management.
 - [x] **v1.1.0 Release** (Search, QuickConnect, Password Persistence).
-- [ ] Support for selecting destination directory before adding a new torrent
-- [ ] Support for selecting individual files *before* adding a new torrent.
-- [ ] Add progress bar to each download item in the main window. 
-- [ ] Add country flags to peers based on IP geolocation
+- [x] Support for selecting destination directory before adding a new torrent
+- [x] Add progress bar to each download item in the main window. 
+- [x] Add country flags to peers and trackers based on IP geolocation
+- [x] Implement Android hardware back button support for all modals.
+- [x] v1.2.0 Release (Trackers, Android UX, Layout Optimization, **Selective Download**, **Real-time Stats**).
 - [ ] Build a standalone `.apk` file for official release.
 - [ ] Add a checkbox "Remember me" to the login screen. If checked, the app will remember the login credentials and will not ask for them again.
 

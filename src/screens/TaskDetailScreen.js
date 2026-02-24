@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, FlatList, ActivityIndicator, Switch, TouchableO
 import { Feather } from '@expo/vector-icons';
 import { useSynology } from '../hooks/useSynology';
 import { useNavigation } from '../hooks/useNavigation';
+import { getIpCountry, getFlagEmoji } from '../utils/geolocation';
 
 export default function TaskDetailScreen({ route }) {
     // If route is passed directly (from App.tsx router), use it; 
@@ -17,14 +18,84 @@ export default function TaskDetailScreen({ route }) {
     const [error, setError] = useState(null);
     const [activeTab, setActiveTab] = useState('General'); // General, Transfer, Tracker, Peers, Files
     const [isActionLoading, setIsActionLoading] = useState(false);
+    const [peerGeo, setPeerGeo] = useState({}); // { [ip]: { countryCode, flag } }
+    const [trackerGeo, setTrackerGeo] = useState({}); // { [host]: { countryCode, flag } }
 
     useEffect(() => {
         loadData();
+
+        // Background polling for stats
+        const interval = setInterval(() => {
+            loadData(true);
+        }, 5000);
+
+        return () => clearInterval(interval);
     }, [task.id]);
 
-    const loadData = async () => {
+    useEffect(() => {
+        if (activeTab === 'Peers' && taskInfo?.peersArray?.length > 0) {
+            updatePeerGeo();
+        } else if (activeTab === 'Tracker' && taskInfo?.trackers?.length > 0) {
+            updateTrackerGeo();
+        }
+    }, [activeTab, taskInfo?.peersArray, taskInfo?.trackers]);
+
+    const updateTrackerGeo = async () => {
+        const trackers = taskInfo.trackers;
+        const newGeo = { ...trackerGeo };
+        let changed = false;
+
+        for (const tracker of trackers) {
+            try {
+                const url = new URL(tracker.url);
+                const host = url.hostname;
+                if (host && !newGeo[host]) {
+                    const info = await getIpCountry(host);
+                    if (info) {
+                        newGeo[host] = {
+                            countryCode: info.countryCode,
+                            flag: getFlagEmoji(info.countryCode)
+                        };
+                        changed = true;
+                    }
+                }
+            } catch (e) {
+                // Ignore invalid URLs
+            }
+        }
+
+        if (changed) {
+            setTrackerGeo(newGeo);
+        }
+    };
+
+    const updatePeerGeo = async () => {
+        const peers = taskInfo.peersArray;
+        const newGeo = { ...peerGeo };
+        let changed = false;
+
+        for (const peer of peers) {
+            if (peer.address && !newGeo[peer.address]) {
+                const info = await getIpCountry(peer.address);
+                if (info) {
+                    newGeo[peer.address] = {
+                        countryCode: info.countryCode,
+                        flag: getFlagEmoji(info.countryCode),
+                        country: info.country
+                    };
+                    changed = true;
+                }
+            }
+        }
+
+        if (changed) {
+            setPeerGeo(newGeo);
+        }
+    };
+
+    const loadData = async (silent = false) => {
         try {
-            setLoading(true);
+            if (!silent) setLoading(true);
             setError(null);
 
             // Execute both API calls concurrently
@@ -54,9 +125,9 @@ export default function TaskDetailScreen({ route }) {
             }
 
         } catch (e) {
-            setError(e.message || 'Failed to load task details');
+            if (!silent) setError(e.message || 'Failed to load task details');
         } finally {
-            setLoading(false);
+            if (!silent) setLoading(false);
         }
     };
 
@@ -256,6 +327,12 @@ export default function TaskDetailScreen({ route }) {
             <View style={styles.infoRow}><Text style={styles.infoLabel}>File size:</Text><Text style={styles.infoValue}>{formatBytes(info.size)}</Text></View>
             <View style={styles.infoRow}><Text style={styles.infoLabel}>URL:</Text><Text style={styles.infoValue} numberOfLines={1} ellipsizeMode="tail">{info.uri}</Text></View>
             <View style={styles.infoRow}><Text style={styles.infoLabel}>Created time:</Text><Text style={styles.infoValue}>{info.createTime ? new Date(info.createTime * 1000).toLocaleString() : 'Unknown'}</Text></View>
+            <View style={styles.infoRow}>
+                <Text style={styles.infoLabel}>Estimated Wait Time:</Text>
+                <Text style={styles.infoValue}>
+                    {info.status === 'downloading' ? 'Not available' : formatEta(info.waitingSeconds)}
+                </Text>
+            </View>
             <View style={styles.infoRow}><Text style={styles.infoLabel}>Completed Time:</Text><Text style={styles.infoValue}>{info.completedTime ? new Date(info.completedTime * 1000).toLocaleString() : 'Not available'}</Text></View>
         </View>
     );
@@ -280,7 +357,9 @@ export default function TaskDetailScreen({ route }) {
 
         let etaStr = '-';
         if (info.status === 'downloading') {
-            if (info.speedDownload > 0 && info.size > 0) {
+            if (info.eta > 0) {
+                etaStr = formatEta(info.eta);
+            } else if (info.speedDownload > 0 && info.size > 0) {
                 const remainingBytes = info.size - info.sizeDownloaded;
                 const seconds = remainingBytes / info.speedDownload;
                 etaStr = formatEta(seconds);
@@ -295,13 +374,13 @@ export default function TaskDetailScreen({ route }) {
                     <View style={styles.infoRow}><Text style={styles.infoLabel}>Status:</Text><Text style={styles.infoValue}>{info.status}</Text></View>
                     <View style={styles.infoRow}><Text style={styles.infoLabel}>Transferred (UL/DL):</Text><Text style={styles.infoValue}>{formatBytes(info.sizeUploaded)} / {formatBytes(info.sizeDownloaded)} ({progress.toFixed(1)}%)</Text></View>
                     <View style={styles.infoRow}><Text style={styles.infoLabel}>Progress:</Text><Text style={styles.infoValue}>{progress.toFixed(1)}%</Text></View>
-                    {info.status === 'downloading' && (
-                        <View style={styles.infoRow}><Text style={styles.infoLabel}>ETA:</Text><Text style={styles.infoValue}>{etaStr}</Text></View>
-                    )}
                     <View style={styles.infoRow}><Text style={styles.infoLabel}>Speed (UL/DL):</Text><Text style={styles.infoValue}>{formatBytes(info.speedUpload)}/s / {formatBytes(info.speedDownload)}/s</Text></View>
                     <View style={styles.infoRow}><Text style={styles.infoLabel}>Connected Peers:</Text><Text style={styles.infoValue}>{peersStr}</Text></View>
                     <View style={styles.infoRow}><Text style={styles.infoLabel}>Total Peers:</Text><Text style={styles.infoValue}>{info.totalPeers || 'Not available'}</Text></View>
                     <View style={styles.infoRow}><Text style={styles.infoLabel}>Downloaded Pieces:</Text><Text style={styles.infoValue}>{pieceStr}</Text></View>
+                    {info.status === 'downloading' && (
+                        <View style={styles.infoRow}><Text style={styles.infoLabel}>Time Left:</Text><Text style={styles.infoValue}>{etaStr}</Text></View>
+                    )}
                     <View style={styles.infoRow}><Text style={styles.infoLabel}>Start Time:</Text><Text style={styles.infoValue}>{info.startedTime ? new Date(info.startedTime * 1000).toLocaleString() : 'Unknown'}</Text></View>
                 </View>
             </ScrollView>
@@ -312,14 +391,55 @@ export default function TaskDetailScreen({ route }) {
         if (!info.trackers || info.trackers.length === 0) {
             return <Text style={styles.emptyText}>No tracker information available.</Text>;
         }
+
+        const sortedTrackers = [...info.trackers].sort((a, b) => {
+            const aS = (a.status || '').toLowerCase();
+            const bS = (b.status || '').toLowerCase();
+            const aW = aS.includes('success') || aS.includes('working') || aS.includes('alive');
+            const bW = bS.includes('success') || bS.includes('working') || bS.includes('alive');
+            if (aW && !bW) return -1;
+            if (!aW && bW) return 1;
+            return (b.seeds || 0) - (a.seeds || 0);
+        });
+
         return (
             <View style={styles.card}>
-                {info.trackers.map((tracker, index) => (
-                    <View key={index} style={styles.listItem}>
-                        <Text style={styles.listItemTitle} numberOfLines={1} ellipsizeMode="tail">{tracker.url}</Text>
-                        <Text style={styles.listItemSub}>Status: {tracker.status} | Seeds: {tracker.seeds} | Peers: {tracker.peers}</Text>
-                    </View>
-                ))}
+                {sortedTrackers.map((tracker, index) => {
+                    let host = '';
+                    let protocol = '';
+                    let port = '';
+                    try {
+                        const url = new URL(tracker.url);
+                        host = url.hostname;
+                        protocol = url.protocol.replace(':', '').toUpperCase();
+                        port = url.port || (protocol === 'HTTPS' ? '443' : protocol === 'HTTP' ? '80' : '');
+                    } catch (e) {
+                        host = tracker.url;
+                    }
+                    const geo = trackerGeo[host];
+
+                    return (
+                        <View key={index} style={styles.listItem}>
+                            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
+                                {geo && <Text style={{ fontSize: 14, marginRight: 6 }}>{geo.flag}</Text>}
+                                <Text style={[styles.listItemTitle, { flex: 1 }]} numberOfLines={1} ellipsizeMode="tail">
+                                    {host}{port ? `:${port}` : ''}
+                                </Text>
+                                <View style={[styles.protocolBadge,
+                                protocol === 'UDP' ? styles.udpBadge :
+                                    protocol === 'HTTPS' ? styles.httpsBadge : styles.httpBadge
+                                ]}>
+                                    <Text style={styles.protocolText}>{protocol}</Text>
+                                </View>
+                            </View>
+                            <Text style={styles.listItemSub}>
+                                Status: <Text style={tracker.status?.toLowerCase().includes('success') ? { color: '#4CAF50' } : {}}>{tracker.status}</Text>
+                                {'  '}|{'  '}<Feather name="arrow-up" size={10} color="#4CAF50" /> {tracker.seeds}
+                                {'  '}|{'  '}<Feather name="arrow-down" size={10} color="#FF9800" /> {tracker.peers}
+                            </Text>
+                        </View>
+                    );
+                })}
             </View>
         );
     };
@@ -330,12 +450,20 @@ export default function TaskDetailScreen({ route }) {
         }
         return (
             <View style={styles.card}>
-                {info.peersArray.map((peer, index) => (
-                    <View key={index} style={styles.listItem}>
-                        <Text style={styles.listItemTitle}>{peer.address}</Text>
-                        <Text style={styles.listItemSub}>Client: {peer.agent} | DL: {formatBytes(peer.speed_download)}/s | UL: {formatBytes(peer.speed_upload)}/s</Text>
-                    </View>
-                ))}
+                {info.peersArray.map((peer, index) => {
+                    const geo = peerGeo[peer.address];
+                    return (
+                        <View key={index} style={styles.listItem}>
+                            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                                {geo && <Text style={{ fontSize: 16, marginRight: 8 }}>{geo.flag}</Text>}
+                                <Text style={styles.listItemTitle}>{peer.address}</Text>
+                            </View>
+                            <Text style={styles.listItemSub}>
+                                Client: {peer.agent} | DL: {formatBytes(peer.speed_download)}/s | UL: {formatBytes(peer.speed_upload)}/s
+                            </Text>
+                        </View>
+                    );
+                })}
             </View>
         );
     };
@@ -408,8 +536,8 @@ const styles = StyleSheet.create({
     header: {
         flexDirection: 'row',
         alignItems: 'center',
-        padding: 16,
-        paddingTop: 60, // approximate safe area
+        paddingHorizontal: 20,
+        paddingTop: 12, // Reduced from 60
         backgroundColor: '#1E1E1E',
         borderBottomWidth: 1,
         borderBottomColor: '#333',
@@ -582,5 +710,25 @@ const styles = StyleSheet.create({
     },
     buttonDisabled: {
         opacity: 0.5,
+    },
+    protocolBadge: {
+        paddingHorizontal: 6,
+        paddingVertical: 2,
+        borderRadius: 4,
+        marginLeft: 8,
+    },
+    udpBadge: {
+        backgroundColor: '#673AB7',
+    },
+    httpsBadge: {
+        backgroundColor: '#4CAF50',
+    },
+    httpBadge: {
+        backgroundColor: '#757575',
+    },
+    protocolText: {
+        color: '#FFF',
+        fontSize: 10,
+        fontWeight: 'bold',
     }
 });

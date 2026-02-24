@@ -93,7 +93,14 @@ export class SynologyClient {
     }
 
     /**
-     * Get the discovered info for an API.
+     * Get a list of all discovered API names.
+     * @returns {string[]}
+     */
+    get knownApiNames() {
+        return Array.from(this.#knownApis.keys());
+    }
+
+    /**
      * @param {string} apiName
      * @returns {ApiInfo|null}
      */
@@ -409,8 +416,14 @@ export class SynologyClient {
             const decodeBase64 = typeof atob === 'function' ? atob : atobPolyfill;
             const encodeBase64 = typeof btoa === 'function' ? btoa : btoaPolyfill;
 
+            // Transliterate string to UTF-8 bytes represented as a Latin1 "byte string"
+            // This allows btoa to process Unicode characters (like Cyrillic) safely.
+            const utf8Encode = (str) => {
+                return unescape(encodeURIComponent(str));
+            };
+
             const fileRawBytes = decodeBase64(fileBase64);
-            const fullMultipartBodyRawString = bodyText + fileRawBytes + footerText;
+            const fullMultipartBodyRawString = utf8Encode(bodyText) + fileRawBytes + utf8Encode(footerText);
             const fullMultipartBodyBase64 = encodeBase64(fullMultipartBodyRawString);
 
             const tempFileUri = FileSystem.cacheDirectory + 'multipart_temp_' + Date.now() + '.tmp';
@@ -582,6 +595,10 @@ export class SynologyError extends Error {
     }
 
     get isAuthError() {
+        // Download Station uses 400-408 for task/file errors, not auth errors.
+        if (this.apiName.includes('DownloadStation')) {
+            return this.code === 105;
+        }
         return this.code === 105 || (this.code >= 400 && this.code <= 408);
         // 105 = permission denied for API
         // 400 = no such account
@@ -598,9 +615,30 @@ export class SynologyError extends Error {
      * @returns {SynologyError}
      */
     static fromCode(code, apiName = '', details = null) {
-        const message = SynologyError.#codeMessages[code] ?? `API error ${code}`;
+        let message = SynologyError.#codeMessages[code] ?? `API error ${code}`;
+
+        // Download Station specific error codes
+        if (apiName.includes('DownloadStation')) {
+            const dsError = SynologyError.#dsCodeMessages[code];
+            if (dsError) {
+                message = dsError;
+            }
+        }
+
         return new SynologyError(message, code, apiName, details);
     }
+
+    static #dsCodeMessages = {
+        400: 'File upload failed',
+        401: 'Max number of tasks reached',
+        402: 'Destination denied',
+        403: 'Destination does not exist',
+        404: 'Invalid task ID',
+        405: 'Invalid task action',
+        406: 'No default destination',
+        407: 'Set destination failed',
+        408: 'File does not exist',
+    };
 
     static #codeMessages = {
         100: 'Unknown error',

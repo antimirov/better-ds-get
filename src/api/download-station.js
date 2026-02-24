@@ -175,40 +175,55 @@ export class DownloadStation {
    * @param {string} [options.username]
    * @param {string} [options.password]
    * @param {string} [options.unzipPassword]
+   * @param {boolean} [options.createList] - If true, returns file list and keeps task waiting (DS2 only)
+   * @param {string} [options.listId] - If provided, finalizes a task from create_list (DS2 only)
+   * @param {number[]} [options.selectedIndices] - Selected file indices for listId (DS2 only)
    */
   async createTask(url, options = {}) {
     const cleanUrl = url.trim();
+    const dest = options.destination ? (options.destination.startsWith('/') ? options.destination.substring(1) : options.destination) : undefined;
 
     // Try newer DS2 API if supported
     if (this.#client.supportsDS2) {
-      const params = {};
-      // DS2 create takes 'type' as raw string and 'url' as JSON array of strings
-      params.type = 'url';
-      params.url = JSON.stringify([cleanUrl]);
+      if (options.listId) {
+        console.log(`[DEBUG] Finalizing task from list_id: ${options.listId} to ${dest || 'default'}`);
 
-      if (options.destination) {
-        // Destination in DS2 is also JSON stringified
-        params.destination = JSON.stringify(options.destination);
-      }
-      if (options.username) params.username = JSON.stringify(options.username);
-      if (options.password) params.password = JSON.stringify(options.password);
-      if (options.unzipPassword) params.unzip_password = JSON.stringify(options.unzipPassword);
+        // Official WebUI logic for task confirmation (captured from curl):
+        // API: SYNO.DownloadStation2.Task.List.Polling
+        // Method: download
+        // Version: 2
+        // Params: list_id, destination, selected (ALL JSON-quoted)
 
-      try {
+        const finalParams = {
+          list_id: JSON.stringify(options.listId),
+          destination: JSON.stringify(dest || 'home/download'),
+          selected: JSON.stringify(options.selectedIndices || []),
+          create_subfolder: 'true'
+        };
+
+        console.log(`[DEBUG] Confirming task: SYNO.DownloadStation2.Task.List.Polling/download, list_id=${finalParams.list_id}, selected=${finalParams.selected}`);
+        return await this.#client.request('SYNO.DownloadStation2.Task.List.Polling', 'download', 2, finalParams);
+      } else {
+        // Standard URL task (Captured from captured_queries.txt patterns)
+        const params = {
+          type: JSON.stringify('url'), // JSON-quoted string
+          url: JSON.stringify([cleanUrl]),
+          create_list: options.createList ? 'true' : 'false'
+        };
+
+        if (dest) params.destination = JSON.stringify(dest);
+        if (options.unzipPassword) params.unzip_password = JSON.stringify(options.unzipPassword);
+
+        console.log(`[DEBUG] Creating DS2 task (v2): url=${params.url}, create_list=${params.create_list}`);
         return await this.#client.request('SYNO.DownloadStation2.Task', 'create', 2, params);
-      } catch (error) {
-        // If it's a "Reserved" error (120) or unknown (100), try falling back to legacy V1 API
-        // which sometimes handles magnet/search links more reliably on some DSM versions.
-        console.warn('DS2 createTask failed, trying legacy V1 fallback:', error.message);
-        if (error.code !== 120 && error.code !== 100) {
-          throw error;
-        }
       }
+    } else {
+      console.log('[DEBUG] supportsDS2 is FALSE. Falling back to legacy API.');
     }
 
     // Fallback to legacy SYNO.DownloadStation.Task (V1)
     const legacyParams = { uri: cleanUrl };
-    if (options.destination) legacyParams.destination = options.destination;
+    if (dest) legacyParams.destination = dest;
     if (options.username) legacyParams.username = options.username;
     if (options.password) legacyParams.password = options.password;
     if (options.unzipPassword) legacyParams.unzip_password = options.unzipPassword;
@@ -227,19 +242,64 @@ export class DownloadStation {
   async createTaskFromFile(file, options = {}) {
     const { name, size, type, uri } = file;
     const fileObj = { name, size, type, uri };
+    const dest = options.destination ? (options.destination.startsWith('/') ? options.destination.substring(1) : options.destination) : undefined;
 
     const params = {
       // The WebUI sends these exactly as JSON stringified values
       file: JSON.stringify(['torrent']),
-      type: JSON.stringify('file'),
-      destination: options.destination ? JSON.stringify(options.destination) : '""',
-      create_list: 'false'
+      type: JSON.stringify('file'), // JSON-quoted string
+      destination: dest ? JSON.stringify(dest) : '""',
+      create_list: options.createList ? 'true' : 'false',
+      size: String(fileObj.size || 0) // Raw string byte size
     };
 
     return this.#client.requestMultipart(
       'SYNO.DownloadStation2.Task', 'create', 2,
       params, [{ name: 'torrent', file: fileObj }]
     );
+  }
+
+  /**
+   * Get file list for a pending task creation.
+   * @param {string} listId 
+   */
+  async getFileList(listId) {
+    try {
+      // Official WebUI logic for fetching list (Captured from captured_queries.txt):
+      // API: SYNO.DownloadStation2.Task.List
+      // Method: get
+      // Version: 2
+      const res = await this.#client.request('SYNO.DownloadStation2.Task.List', 'get', 2, {
+        list_id: JSON.stringify(listId)
+      });
+
+      console.log(`[DEBUG] getFileList Successful Response:`, JSON.stringify(res, null, 2));
+
+      const fileList = res.file || res.files || res.items || (Array.isArray(res) ? res : null) ||
+        res.data?.file || res.data?.files || res.data?.items;
+
+      if (fileList) {
+        return Array.isArray(fileList) ? fileList : [fileList];
+      }
+      throw new Error('No files found in response');
+    } catch (error) {
+      console.warn(`SYNO.DownloadStation2.Task.List.get failed: ${error.message}. Falling back to discovery loop.`);
+      // Minimal discovery loop as backup
+      const backupCalls = [
+        { api: 'SYNO.DownloadStation2.Task.BT.File', method: 'list', versions: [2, 1] },
+        { api: 'SYNO.DownloadStation2.Task', method: 'get', versions: [2, 1] },
+      ];
+      for (const call of backupCalls) {
+        for (const version of call.versions) {
+          try {
+            const res = await this.#client.request(call.api, call.method, version, { list_id: listId, additional: 'file' });
+            const files = res.file || res.files || res.items || res.data?.files;
+            if (files) return Array.isArray(files) ? files : [files];
+          } catch (e) { /* ignore */ }
+        }
+      }
+      throw error;
+    }
   }
   /**
    * Pause task(s).
@@ -507,12 +567,23 @@ export class DownloadStation {
       totalPieces: detail.total_pieces ?? 0,
       pieceLength: detail.piece_length ?? 0,
 
-      // Peers
-      connectedSeeder: detail.connected_seeder ?? 0,
-      connectedLeecher: detail.connected_leecher ?? 0,
-      unconnectedSeeder: detail.unconnected_seeder ?? 0,
-      unconnectedPeers: detail.unconnected_peers ?? 0,
-      totalPeers: detail.total_peers ?? 0,
+      // Peers (Exhaustive check across all potential naming conventions and locations)
+      connectedSeeder: (
+        detail.connected_seeder ?? transfer.connected_seeder ?? raw.connected_seeder ??
+        detail.connected_seeders ?? transfer.connected_seeders ?? raw.connected_seeders ??
+        detail.seeders ?? transfer.seeders ?? raw.status_extra?.connected_seeder ?? 0
+      ),
+      connectedLeecher: (
+        detail.connected_leecher ?? transfer.connected_leecher ?? raw.connected_leecher ??
+        detail.connected_leechers ?? transfer.connected_leechers ?? raw.connected_leechers ??
+        detail.leechers ?? transfer.leechers ?? raw.status_extra?.connected_leecher ?? 0
+      ),
+      unconnectedSeeder: detail.unconnected_seeder ?? transfer.unconnected_seeder ?? raw.unconnected_seeder ?? 0,
+      unconnectedPeers: detail.unconnected_peers ?? transfer.unconnected_peers ?? raw.unconnected_peers ?? 0,
+      totalPeers: (
+        (detail.total_peers ?? transfer.total_peers ?? raw.total_peers ??
+          detail.connected_peers ?? transfer.connected_peers) || 0
+      ),
 
       // Transfer info
       sizeDownloaded: transfer.size_downloaded ?? raw.size_downloaded ?? 0,
@@ -520,6 +591,7 @@ export class DownloadStation {
       speedDownload: transfer.speed_download ?? raw.speed_download ?? 0,
       speedUpload: transfer.speed_upload ?? raw.speed_upload ?? 0,
       downloadedPieces: transfer.downloaded_pieces ?? 0,
+      eta: transfer.eta ?? transfer.time_left ?? 0, // ETA in seconds
 
       // Error info
       errorDetail: raw.status_extra?.error_detail ?? '',
@@ -528,6 +600,8 @@ export class DownloadStation {
       trackers: raw.additional?.tracker ?? [],
       peersArray: raw.additional?.peer ?? [],
     };
+
+    return res;
   }
 }
 

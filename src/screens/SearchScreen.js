@@ -4,9 +4,11 @@ import { Feather } from '@expo/vector-icons';
 import { useSynology } from '../hooks/useSynology';
 import { useNavigation } from '../hooks/useNavigation';
 import { useSearch } from '../hooks/useSearch';
+import FileSelectionModal from '../components/FileSelectionModal';
+import FolderPickerModal from '../components/FolderPickerModal';
 
 export default function SearchScreen() {
-    const { downloadStation } = useSynology();
+    const { downloadStation, sessionManager } = useSynology();
     const {
         keyword, setKeyword, results, searching, isFinished, modules,
         startSearch, cancelSearch, clearSearch
@@ -14,6 +16,34 @@ export default function SearchScreen() {
 
     const [localKeyword, setLocalKeyword] = React.useState(keyword);
     const [loading, setLoading] = React.useState(false);
+
+    // File Selection state
+    const [selectionModalVisible, setSelectionModalVisible] = React.useState(false);
+    const [pendingFiles, setPendingFiles] = React.useState([]);
+    const [pendingListId, setPendingListId] = React.useState(null);
+    const [isConfirmingFiles, setIsConfirmingFiles] = React.useState(false);
+
+    // Destination Folder State
+    const [isFolderModalVisible, setFolderModalVisible] = React.useState(false);
+    const [selectedDestination, setSelectedDestination] = React.useState('');
+    const [defaultDestination, setDefaultDestination] = React.useState('');
+
+    // Fetch default destination on mount
+    React.useEffect(() => {
+        const fetchConfig = async () => {
+            try {
+                const config = await sessionManager.execute(() => sessionManager.ds.getConfig());
+                if (config && config.default_destination) {
+                    setDefaultDestination(config.default_destination);
+                }
+            } catch (e) {
+                console.warn('Failed to fetch default destination for search screen', e);
+            }
+        };
+        if (sessionManager.isConnected) {
+            fetchConfig();
+        }
+    }, [sessionManager.connectionState]);
 
     // Keep local keyword in sync if changed from context (e.g. clearSearch)
     React.useEffect(() => {
@@ -35,12 +65,44 @@ export default function SearchScreen() {
     const handleAddTask = async (item) => {
         try {
             setLoading(true);
-            await downloadStation.createTask(item.download_uri);
-            Alert.alert('Success', 'Download task added: ' + item.title);
+            const destination = selectedDestination || defaultDestination || '';
+            const result = await downloadStation.createTask(item.download_uri, {
+                createList: true,
+                destination: destination
+            });
+
+            if (result.list_id && result.list_id.length > 0) {
+                const listId = result.list_id[0];
+                const files = await downloadStation.getFileList(listId);
+                setPendingListId(listId);
+                setPendingFiles(files);
+                setSelectionModalVisible(true);
+            } else {
+                Alert.alert('Success', 'Download task added: ' + item.title);
+            }
         } catch (e) {
             Alert.alert('Error', 'Failed to add task: ' + e.message);
         } finally {
             setLoading(false);
+        }
+    };
+
+    const handleConfirmSelection = async ({ wanted, unwanted }) => {
+        setIsConfirmingFiles(true);
+        try {
+            // Finalize task creation with selected files
+            await sessionManager.execute(() => downloadStation.createTask('', {
+                listId: pendingListId,
+                selectedIndices: wanted,
+                destination: selectedDestination || defaultDestination || ''
+            }));
+
+            setSelectionModalVisible(false);
+            Alert.alert('Success', 'Download started with selected files');
+        } catch (error) {
+            Alert.alert('Error', 'Failed to finalize selection: ' + error.message);
+        } finally {
+            setIsConfirmingFiles(false);
         }
     };
 
@@ -102,6 +164,20 @@ export default function SearchScreen() {
                 </TouchableOpacity>
             </View>
 
+            <View style={styles.destinationBar}>
+                <Text style={styles.destinationLabel}>Save to:</Text>
+                <TouchableOpacity
+                    style={styles.destinationSelector}
+                    onPress={() => setFolderModalVisible(true)}
+                >
+                    <Feather name="folder" size={14} color="#00A1E4" style={{ marginRight: 6 }} />
+                    <Text style={styles.destinationPath} numberOfLines={1} ellipsizeMode="middle">
+                        {selectedDestination || defaultDestination || 'Default Share'}
+                    </Text>
+                    <Feather name="edit-2" size={12} color="#888" style={{ marginLeft: 'auto' }} />
+                </TouchableOpacity>
+            </View>
+
             {searching && (
                 <View style={styles.searchingStatus}>
                     <View style={styles.statusInfo}>
@@ -146,6 +222,25 @@ export default function SearchScreen() {
                 contentContainerStyle={styles.listContent}
                 ItemSeparatorComponent={() => <View style={styles.separator} />}
             />
+
+            <FileSelectionModal
+                visible={selectionModalVisible}
+                files={pendingFiles}
+                isConfirming={isConfirmingFiles}
+                onConfirm={handleConfirmSelection}
+                onCancel={() => setSelectionModalVisible(false)}
+            />
+
+            <FolderPickerModal
+                visible={isFolderModalVisible}
+                onClose={() => setFolderModalVisible(false)}
+                onSelect={(path) => {
+                    setSelectedDestination(path);
+                    setFolderModalVisible(false);
+                }}
+                currentDefaultFolder={defaultDestination}
+                title="Select Task Destination"
+            />
         </View>
     );
 }
@@ -158,12 +253,39 @@ const styles = StyleSheet.create({
     header: {
         flexDirection: 'row',
         alignItems: 'center',
-        paddingHorizontal: 16,
-        paddingTop: 60, // approximate safe area
+        paddingHorizontal: 20,
+        paddingTop: 12, // Reduced from 60
         paddingBottom: 16,
+        backgroundColor: '#1E1E1E',
+        // removed borderBottomWidth here, moving it to destinationBar
+    },
+    destinationBar: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingHorizontal: 20,
+        paddingBottom: 12,
         backgroundColor: '#1E1E1E',
         borderBottomWidth: 1,
         borderBottomColor: '#333',
+    },
+    destinationLabel: {
+        color: '#888',
+        fontSize: 13,
+        marginRight: 8,
+    },
+    destinationSelector: {
+        flex: 1,
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: '#2A2A2A',
+        paddingHorizontal: 10,
+        paddingVertical: 6,
+        borderRadius: 6,
+    },
+    destinationPath: {
+        color: '#E0E0E0',
+        fontSize: 13,
+        flex: 1,
     },
     searchBar: {
         flex: 1,
