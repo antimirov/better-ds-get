@@ -384,8 +384,19 @@ export class SynologyClient {
         console.log('File:', name, file.uri);
 
         try {
+            // For content:// URIs from 3rd-party apps (e.g. Total Commander), expo-file-system
+            // cannot read them directly. We must first copy the file into our own cache dir.
+            let readableUri = file.uri;
+            if (readableUri.startsWith('content://')) {
+                const ext = (file.name || 'upload.torrent').split('.').pop() || 'torrent';
+                const cacheUri = `${FileSystem.cacheDirectory}upload_${Date.now()}.${ext}`;
+                console.log('Content URI detected, copying to cache:', cacheUri);
+                await FileSystem.copyAsync({ from: readableUri, to: cacheUri });
+                readableUri = cacheUri;
+            }
+
             // Read file as base64 using literal 'base64' string to avoid undefined enums
-            const fileBase64 = await FileSystem.readAsStringAsync(file.uri, { encoding: 'base64' });
+            const fileBase64 = await FileSystem.readAsStringAsync(readableUri, { encoding: 'base64' });
 
             // To construct the raw byte string, we use atob to decode the base64 characters
             // Since React Native Hermes engine DOES NOT have atob/btoa built-in typically,
