@@ -9,20 +9,70 @@ import TaskListScreen from './src/screens/TaskListScreen';
 import TaskDetailScreen from './src/screens/TaskDetailScreen';
 import SearchScreen from './src/screens/SearchScreen';
 import { Feather } from '@expo/vector-icons';
+import * as Linking from 'expo-linking';
 
 // --- App content that respects auth state ---
 const MainApp = () => {
   const { isConnected, isInitializing } = useSynology();
   const { currentScreen, params, navigate } = useNavigation();
+  const [pendingUrl, setPendingUrl] = React.useState<string | null>(null);
+
+  const handleIncomingUrl = (url: string | null) => {
+    if (!url) return;
+    console.log('App: Handling incoming URL:', url);
+
+    // Clean up Expo Go wrapping (e.g., exp://.../--/magnet:...)
+    let targetUrl = url;
+    if (url.includes('/--/')) {
+      targetUrl = url.split('/--/')[1];
+    }
+
+    // Decode double encoding which often happens with intents/deep links
+    try {
+      if (targetUrl.includes('%')) {
+        targetUrl = decodeURIComponent(targetUrl);
+        // If still contains double encoding artifacts like %25 (which is %)
+        if (targetUrl.includes('%25') || targetUrl.includes('%3A')) {
+          targetUrl = decodeURIComponent(targetUrl);
+        }
+      }
+    } catch (e) {
+      console.warn('App: Failed to decode targetUrl:', targetUrl);
+    }
+
+    setPendingUrl(targetUrl);
+  };
+
+  // Listen for incoming URLs (Deep Linking / Intents)
+  useEffect(() => {
+    const handleInitialUrl = async () => {
+      const url = await Linking.getInitialURL();
+      if (url) handleIncomingUrl(url);
+    };
+    handleInitialUrl();
+
+    const subscription = Linking.addEventListener('url', (event) => {
+      handleIncomingUrl(event.url);
+    });
+
+    return () => {
+      subscription.remove();
+    };
+  }, []);
 
   // Sync navigation base state with auth state
   useEffect(() => {
     if (isConnected && currentScreen === 'Login') {
-      navigate('TaskList');
+      navigate('TaskList', pendingUrl ? { autoAddUrl: pendingUrl } : undefined);
+      if (pendingUrl) setPendingUrl(null);
     } else if (!isConnected && currentScreen !== 'Login') {
       navigate('Login');
+    } else if (isConnected && pendingUrl) {
+      // If already logged in and we receive a URL, force navigation to TaskList with the URL
+      navigate('TaskList', { autoAddUrl: pendingUrl });
+      setPendingUrl(null);
     }
-  }, [isConnected, currentScreen]);
+  }, [isConnected, currentScreen, pendingUrl]);
 
   if (isInitializing) {
     return (
@@ -38,7 +88,8 @@ const MainApp = () => {
     if (!isConnected) return <LoginScreen />;
     if (currentScreen === 'TaskDetail') return <TaskDetailScreen route={{ params }} />;
     if (currentScreen === 'Search') return <SearchScreen />;
-    return <TaskListScreen />;
+    // @ts-ignore - TaskListScreen is JS and TS might not see the route prop
+    return <TaskListScreen route={{ params }} />;
   };
 
   return (

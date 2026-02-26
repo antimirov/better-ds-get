@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.3.0] - 2026-02-25
+
+### Added
+- **Native Intent Filters**: The app now officially intercepts `magnet:` links and `.torrent` files from third-party apps like Firefox and Chrome.
+- **Deep Linking**: Incoming URL support for "opening" links into the app from the browser or other platforms.
+- **Safe Content Handlers**: Implemented a native Android plugin to safely copy protected `content://` URIs (like from Firefox) to a readable cache before processing.
+
 ## [1.2.0] - 2026-02-24
 
 ### Added

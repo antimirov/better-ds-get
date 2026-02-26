@@ -9,7 +9,7 @@ import FileSelectionModal from '../components/FileSelectionModal';
 import FolderPickerModal from '../components/FolderPickerModal';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-export default function TaskListScreen() {
+export default function TaskListScreen({ route }) {
     const { sessionManager, connectionState } = useSynology();
     const { navigate } = useNavigation();
     const [tasks, setTasks] = useState([]);
@@ -133,38 +133,13 @@ export default function TaskListScreen() {
         }
     };
 
-    const handleAddTorrentFile = async () => {
+    const handleDirectTorrentUpload = async (rnFile) => {
+        setIsAdding(true);
         try {
-            const result = await DocumentPicker.getDocumentAsync({
-                type: ['application/x-bittorrent', '*/*'], // Fallback to all files if mime is weird
-                copyToCacheDirectory: true,
-            });
-
-            if (result.canceled || !result.assets || result.assets.length === 0) {
-                return;
-            }
-
-            const file = result.assets[0];
-            setIsAdding(true);
-
-            // Log asset keys to trace C++ HostObject issues
-            console.log('DocumentPicker result keys:', Object.keys(result.assets[0]));
-            let rnFile = { uri: result.assets[0].uri };
-            try {
-                rnFile.name = result.assets[0].name || 'upload.torrent';
-                rnFile.type = result.assets[0].mimeType || 'application/x-bittorrent';
-            } catch (propErr) {
-                console.error('Error reading properties from DocumentPicker asset!', propErr);
-                rnFile.name = 'upload.torrent';
-                rnFile.type = 'application/x-bittorrent';
-            }
-
             const uploadResult = await sessionManager.execute(() => sessionManager.ds.createTaskFromFile(rnFile, {
                 destination: selectedAddFolder,
                 createList: true
             }));
-
-            setAddModalVisible(false);
 
             if (uploadResult.list_id && uploadResult.list_id.length > 0) {
                 const listId = uploadResult.list_id[0];
@@ -182,6 +157,64 @@ export default function TaskListScreen() {
             setIsAdding(false);
         }
     };
+
+    const handleAddTorrentFile = async () => {
+        try {
+            const result = await DocumentPicker.getDocumentAsync({
+                type: ['application/x-bittorrent', '*/*'], // Fallback to all files if mime is weird
+                copyToCacheDirectory: true,
+            });
+
+            if (result.canceled || !result.assets || result.assets.length === 0) {
+                return;
+            }
+
+            const file = result.assets[0];
+
+            // Log asset keys to trace C++ HostObject issues
+            console.log('DocumentPicker result keys:', Object.keys(file));
+            let rnFile = { uri: file.uri };
+            try {
+                rnFile.name = file.name || 'upload.torrent';
+                rnFile.type = file.mimeType || 'application/x-bittorrent';
+            } catch (propErr) {
+                console.error('Error reading properties from DocumentPicker asset!', propErr);
+                rnFile.name = 'upload.torrent';
+                rnFile.type = 'application/x-bittorrent';
+            }
+
+            setAddModalVisible(false);
+            await handleDirectTorrentUpload(rnFile);
+        } catch (error) {
+            Alert.alert('Error', 'Failed to pick torrent: ' + error.message);
+        }
+    };
+
+    // Handle deep links passed via navigation
+    useEffect(() => {
+        const autoAddUrl = route?.params?.autoAddUrl;
+        if (autoAddUrl) {
+            console.log('Received autoAddUrl:', autoAddUrl);
+
+            // If it's a content URI or file URI, trigger file upload directly
+            if (autoAddUrl.startsWith('file:') || autoAddUrl.startsWith('content:')) {
+                const rnFile = {
+                    uri: autoAddUrl,
+                    // Try to guess a name, fallback to generic
+                    name: decodeURIComponent(autoAddUrl.split('/').pop() || 'upload.torrent'),
+                    type: 'application/x-bittorrent'
+                };
+                handleDirectTorrentUpload(rnFile);
+            } else {
+                // Magnet link or custom scheme
+                setNewTaskUrl(autoAddUrl);
+                setAddModalVisible(true);
+            }
+
+            // Clear param
+            if (route.params) route.params.autoAddUrl = undefined;
+        }
+    }, [route?.params?.autoAddUrl, selectedAddFolder]);
 
     const handleConfirmSelection = async ({ wanted, unwanted }) => {
         setIsConfirmingFiles(true);

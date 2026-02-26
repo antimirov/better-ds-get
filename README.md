@@ -67,6 +67,7 @@ Original Synology "DS Get" app suffered from several issues:
 - [x] Add country flags to peers and trackers based on IP geolocation
 - [x] Implement Android hardware back button support for all modals.
 - [x] v1.2.0 Release (Trackers, Android UX, Layout Optimization, **Selective Download**, **Real-time Stats**).
+- [x] Add Intent Filter for magnet links and .torrent files.
 - [ ] Build a standalone `.apk` file for official release.
 - [ ] Add a checkbox "Remember me" to the login screen. If checked, the app will remember the login credentials and will not ask for them again.
 
