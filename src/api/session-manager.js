@@ -28,7 +28,10 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
  */
 export const ConnectionState = {
   DISCONNECTED: 'disconnected',
-  CONNECTING: 'connecting',
+  CONNECTING: 'connecting',       // General connecting state
+  RESOLVING_QC: 'resolving_qc',   // Specifically resolving QuickConnect
+  AUTHORIZING: 'authorizing',     // Performing login handshake
+  FETCHING_INFO: 'fetching_info', // Getting NAS config/info
   CONNECTED: 'connected',
   RECONNECTING: 'reconnecting',
   ERROR: 'error',
@@ -162,6 +165,7 @@ export class SessionManager extends EventBus {
       this.#client.setBaseUrl(url);
 
       // Login
+      this.#setState(ConnectionState.AUTHORIZING);
       const loginResult = await this.#client.login(account, password, { otp });
 
       // Store credentials for auto-reconnect
@@ -175,6 +179,7 @@ export class SessionManager extends EventBus {
       this.#ds = new DownloadStation(this.#client);
 
       // Get DS info
+      this.#setState(ConnectionState.FETCHING_INFO);
       let dsInfo = null;
       try {
         dsInfo = await this.#ds.getInfo();

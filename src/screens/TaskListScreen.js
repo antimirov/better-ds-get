@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { View, Text, FlatList, StyleSheet, Alert, TouchableOpacity, RefreshControl, Modal, TextInput, KeyboardAvoidingView, Platform, ActivityIndicator } from 'react-native';
+import { View, Text, FlatList, StyleSheet, Alert, TouchableOpacity, RefreshControl, Modal, TextInput, KeyboardAvoidingView, Platform, ActivityIndicator, BackHandler, Linking, Image, ScrollView, TouchableWithoutFeedback } from 'react-native';
+import Constants from 'expo-constants';
 import { Feather } from '@expo/vector-icons';
 import * as DocumentPicker from 'expo-document-picker';
 import { useSynology } from '../hooks/useSynology';
@@ -38,6 +39,9 @@ export default function TaskListScreen({ route }) {
     const [pendingFiles, setPendingFiles] = useState([]);
     const [pendingListId, setPendingListId] = useState(null);
     const [isConfirmingFiles, setIsConfirmingFiles] = useState(false);
+
+    // Whether the Add Task modal was opened via an external Intent (magnet/torrent link)
+    const [isIntentMode, setIsIntentMode] = useState(false);
 
     const fetchTasks = useCallback(async () => {
         if (!sessionManager.ds) return;
@@ -200,21 +204,57 @@ export default function TaskListScreen({ route }) {
             if (autoAddUrl.startsWith('file:') || autoAddUrl.startsWith('content:')) {
                 const rnFile = {
                     uri: autoAddUrl,
-                    // Try to guess a name, fallback to generic
                     name: decodeURIComponent(autoAddUrl.split('/').pop() || 'upload.torrent'),
                     type: 'application/x-bittorrent'
                 };
                 handleDirectTorrentUpload(rnFile);
             } else {
-                // Magnet link or custom scheme
+                // Magnet link or custom scheme — show simplified modal (no .torrent upload button)
+                setIsIntentMode(true);
                 setNewTaskUrl(autoAddUrl);
                 setAddModalVisible(true);
             }
 
             // Clear param
             if (route.params) route.params.autoAddUrl = undefined;
+        } else {
+            // Not opened via intent — reset intent mode when modal is closed
+            if (!isAddModalVisible) setIsIntentMode(false);
         }
     }, [route?.params?.autoAddUrl, selectedAddFolder]);
+
+    // Android Back button: exit to home screen when no modal is open
+    useEffect(() => {
+        const onBackPress = () => {
+            if (isAddModalVisible) {
+                setAddModalVisible(false);
+                setIsIntentMode(false);
+                return true;
+            }
+            if (isSettingsModalVisible) {
+                setSettingsModalVisible(false);
+                return true;
+            }
+            if (isInfoModalVisible) {
+                setInfoModalVisible(false);
+                return true;
+            }
+            if (selectionModalVisible) {
+                setSelectionModalVisible(false);
+                return true;
+            }
+            if (isFolderModalVisible) {
+                setFolderModalVisible(false);
+                return true;
+            }
+            // No modal open — move app to background (Android home behavior)
+            BackHandler.exitApp();
+            return true;
+        };
+
+        const sub = BackHandler.addEventListener('hardwareBackPress', onBackPress);
+        return () => sub.remove();
+    }, [isAddModalVisible, isSettingsModalVisible, isInfoModalVisible, selectionModalVisible, isFolderModalVisible]);
 
     const handleConfirmSelection = async ({ wanted, unwanted }) => {
         setIsConfirmingFiles(true);
@@ -521,11 +561,15 @@ export default function TaskListScreen({ route }) {
                             </Text>
                         </TouchableOpacity>
 
-                        <View style={styles.divider} />
-
-                        <TouchableOpacity style={[styles.modalButton, styles.secondaryButton, isAdding && styles.buttonDisabled]} onPress={handleAddTorrentFile} disabled={isAdding}>
-                            {isAdding ? <ActivityIndicator color="#FFF" /> : <Text style={styles.modalButtonText}>Upload .torrent File</Text>}
-                        </TouchableOpacity>
+                        {/* Only show .torrent upload option when NOT launched via external intent */}
+                        {!isIntentMode && (
+                            <>
+                                <View style={styles.divider} />
+                                <TouchableOpacity style={[styles.modalButton, styles.secondaryButton, isAdding && styles.buttonDisabled]} onPress={handleAddTorrentFile} disabled={isAdding}>
+                                    {isAdding ? <ActivityIndicator color="#FFF" /> : <Text style={styles.modalButtonText}>Upload .torrent File</Text>}
+                                </TouchableOpacity>
+                            </>
+                        )}
 
                         <TouchableOpacity style={styles.closeModalButton} onPress={() => setAddModalVisible(false)} disabled={isAdding}>
                             <Text style={styles.closeModalText}>Cancel</Text>
@@ -541,77 +585,98 @@ export default function TaskListScreen({ route }) {
                 animationType="fade"
                 onRequestClose={() => setSettingsModalVisible(false)}
             >
-                <View style={styles.modalOverlay}>
-                    <View style={styles.settingsModalContent}>
-                        <Text style={styles.settingsModalTitle}>Settings & Actions</Text>
+                <TouchableOpacity 
+                    style={styles.modalOverlay} 
+                    activeOpacity={1} 
+                    onPressOut={() => setSettingsModalVisible(false)}
+                >
+                    <TouchableWithoutFeedback>
+                        <View style={[styles.settingsModalContent, { maxHeight: '90%' }]}>
+                            <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 10 }}>
+                                <Text style={styles.settingsModalTitle}>Settings & Actions</Text>
 
-                        <View style={styles.settingsUserInfo}>
-                            <Feather name="user" size={16} color="#888" style={{ marginRight: 8 }} />
-                            <Text style={styles.settingsUserText}>Logged in as: {sessionManager.credentials?.account || 'Unknown'}</Text>
-                            <TouchableOpacity
-                                style={{ marginLeft: 'auto', padding: 4 }}
-                                onPress={() => {
-                                    setSettingsModalVisible(false);
-                                    setInfoModalVisible(true);
-                                }}
-                            >
-                                <Feather name="info" size={20} color="#00A1E4" />
-                            </TouchableOpacity>
-                        </View>
-
-                        <View style={styles.settingsDivider} />
-
-                        <TouchableOpacity style={styles.settingsActionRow} onPress={handleResumeAll} disabled={isActionLoading}>
-                            <Feather name="play" size={20} color="#E0E0E0" />
-                            <Text style={styles.settingsActionText}>Resume All</Text>
-                        </TouchableOpacity>
-
-                        <TouchableOpacity style={styles.settingsActionRow} onPress={handlePauseAll} disabled={isActionLoading}>
-                            <Feather name="pause" size={20} color="#E0E0E0" />
-                            <Text style={styles.settingsActionText}>Pause All</Text>
-                        </TouchableOpacity>
-
-                        <TouchableOpacity style={styles.settingsActionRow} onPress={handleClearCompleted} disabled={isActionLoading}>
-                            <Feather name="check" size={20} color="#4CAF50" />
-                            <Text style={styles.settingsActionText}>Clear Completed</Text>
-                        </TouchableOpacity>
-
-                        <TouchableOpacity style={styles.settingsActionRow} onPress={handleClearError} disabled={isActionLoading}>
-                            <Feather name="alert-triangle" size={20} color="#FF9800" />
-                            <Text style={styles.settingsActionText}>Remove Failed Tasks</Text>
-                        </TouchableOpacity>
-
-                        <TouchableOpacity style={styles.settingsActionRow} onPress={handleRemoveAll} disabled={isActionLoading}>
-                            <Feather name="trash-2" size={20} color="#FF6B6B" />
-                            <Text style={[styles.settingsActionText, { color: '#FF6B6B' }]}>Remove All</Text>
-                        </TouchableOpacity>
-
-                        <View style={styles.settingsDivider} />
-
-                        <TouchableOpacity style={styles.settingsActionRow} onPress={handleOpenFolderModal} disabled={isActionLoading}>
-                            <Feather name="folder" size={20} color="#00A1E4" />
-                            <View>
-                                <Text style={[styles.settingsActionText, { color: '#00A1E4' }]}>Change Default Download Folder</Text>
-                                {!!currentDefaultFolder && (
-                                    <Text style={[styles.settingsActionText, { color: '#888', fontSize: 12, marginTop: 2 }]}>
-                                        Current: {currentDefaultFolder}
-                                    </Text>
-                                )}
+                            <View style={styles.settingsUserInfo}>
+                                <Feather name="user" size={16} color="#888" style={{ marginRight: 8 }} />
+                                <Text style={styles.settingsUserText}>Logged in as: {sessionManager.credentials?.account || 'Unknown'}</Text>
+                                <TouchableOpacity
+                                    style={{ marginLeft: 'auto', padding: 4 }}
+                                    onPress={() => {
+                                        setSettingsModalVisible(false);
+                                        setInfoModalVisible(true);
+                                    }}
+                                >
+                                    <Feather name="info" size={20} color="#00A1E4" />
+                                </TouchableOpacity>
                             </View>
-                        </TouchableOpacity>
 
-                        <View style={styles.settingsDivider} />
+                            <View style={styles.settingsDivider} />
 
-                        <TouchableOpacity style={styles.settingsActionRow} onPress={handleLogout}>
-                            <Feather name="log-out" size={20} color="#FF6B6B" />
-                            <Text style={[styles.settingsActionText, { color: '#FF6B6B' }]}>Logout</Text>
-                        </TouchableOpacity>
+                            <TouchableOpacity style={styles.settingsActionRow} onPress={handleResumeAll} disabled={isActionLoading}>
+                                <Feather name="play" size={20} color="#E0E0E0" />
+                                <Text style={styles.settingsActionText}>Resume All</Text>
+                            </TouchableOpacity>
 
-                        <TouchableOpacity style={styles.settingsCloseButton} onPress={() => setSettingsModalVisible(false)} disabled={isActionLoading}>
-                            <Text style={styles.settingsCloseText}>Close</Text>
-                        </TouchableOpacity>
+                            <TouchableOpacity style={styles.settingsActionRow} onPress={handlePauseAll} disabled={isActionLoading}>
+                                <Feather name="pause" size={20} color="#E0E0E0" />
+                                <Text style={styles.settingsActionText}>Pause All</Text>
+                            </TouchableOpacity>
+
+                            <TouchableOpacity style={styles.settingsActionRow} onPress={handleClearCompleted} disabled={isActionLoading}>
+                                <Feather name="check" size={20} color="#4CAF50" />
+                                <Text style={styles.settingsActionText}>Clear Completed</Text>
+                            </TouchableOpacity>
+
+                            <TouchableOpacity style={styles.settingsActionRow} onPress={handleClearError} disabled={isActionLoading}>
+                                <Feather name="alert-triangle" size={20} color="#FF9800" />
+                                <Text style={styles.settingsActionText}>Remove Failed Tasks</Text>
+                            </TouchableOpacity>
+
+                            <TouchableOpacity style={styles.settingsActionRow} onPress={handleRemoveAll} disabled={isActionLoading}>
+                                <Feather name="trash-2" size={20} color="#FF6B6B" />
+                                <Text style={[styles.settingsActionText, { color: '#FF6B6B' }]}>Remove All</Text>
+                            </TouchableOpacity>
+
+                            <View style={styles.settingsDivider} />
+
+                            <TouchableOpacity style={styles.settingsActionRow} onPress={handleOpenFolderModal} disabled={isActionLoading}>
+                                <Feather name="folder" size={20} color="#00A1E4" />
+                                <View>
+                                    <Text style={[styles.settingsActionText, { color: '#00A1E4' }]}>Change Default Download Folder</Text>
+                                    {!!currentDefaultFolder && (
+                                        <Text style={[styles.settingsActionText, { color: '#888', fontSize: 12, marginTop: 2 }]}>
+                                            Current: {currentDefaultFolder}
+                                        </Text>
+                                    )}
+                                </View>
+                            </TouchableOpacity>
+
+                            <View style={styles.settingsDivider} />
+
+                            <TouchableOpacity style={styles.settingsActionRow} onPress={handleLogout}>
+                                <Feather name="log-out" size={20} color="#FF6B6B" />
+                                <Text style={[styles.settingsActionText, { color: '#FF6B6B' }]}>Logout</Text>
+                            </TouchableOpacity>
+
+                            <View style={styles.settingsDivider} />
+
+                            {/* About section */}
+                            <View style={styles.aboutSection}>
+                                <Image source={require('../../assets/icon.png')} style={{ width: 64, height: 64, borderRadius: 16, marginBottom: 12 }} />
+                                <Text style={styles.aboutTitle}>Better DS Get</Text>
+                                <Text style={styles.aboutLine}>Version {Constants.expoConfig?.version || '—'}</Text>
+                                <Text style={styles.aboutLine}>by Yevgen Antymyrov</Text>
+                                <TouchableOpacity onPress={() => Linking.openURL('mailto:android@antimirov.net')}>
+                                    <Text style={styles.aboutEmail}>android@antimirov.net</Text>
+                                </TouchableOpacity>
+                            </View>
+
+                            <TouchableOpacity style={styles.settingsCloseButton} onPress={() => setSettingsModalVisible(false)} disabled={isActionLoading}>
+                                <Text style={styles.settingsCloseText}>Close</Text>
+                            </TouchableOpacity>
+                        </ScrollView>
                     </View>
-                </View>
+                    </TouchableWithoutFeedback>
+                </TouchableOpacity>
             </Modal>
 
             {renderInfoModal()}
@@ -953,5 +1018,26 @@ const styles = StyleSheet.create({
         borderRadius: 4,
         backgroundColor: '#4CAF50',
         marginLeft: 8,
-    }
+    },
+    aboutSection: {
+        alignItems: 'center',
+        paddingVertical: 16,
+    },
+    aboutTitle: {
+        color: '#00A1E4',
+        fontSize: 16,
+        fontWeight: 'bold',
+        marginBottom: 4,
+    },
+    aboutLine: {
+        color: '#888',
+        fontSize: 13,
+        marginBottom: 2,
+    },
+    aboutEmail: {
+        color: '#00A1E4',
+        fontSize: 13,
+        marginTop: 4,
+        textDecorationLine: 'underline',
+    },
 });

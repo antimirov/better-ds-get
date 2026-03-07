@@ -461,8 +461,9 @@ export class DownloadStation {
    */
   async btSearchStart(keyword, module = 'all') {
     return this.#client.request('SYNO.DownloadStation.BTSearch', 'start', 1, {
-      keyword, module,
-    });
+      keyword,
+      module
+    }, { timeoutMs: 120000 });
   }
 
   /**
@@ -471,12 +472,16 @@ export class DownloadStation {
    * @param {number} [offset=0]
    * @param {number} [limit=50]
    */
-  async btSearchList(taskid, offset = 0, limit = 50) {
+  async btSearchList(taskId, offset = 0, limit = 50, sortBy = 'title', sortDirection = 'asc', filterCategory = '', additional = ['module']) {
     return this.#client.request('SYNO.DownloadStation.BTSearch', 'list', 1, {
-      taskid, offset, limit,
-      sort_by: 'seeds',
-      sort_direction: 'desc',
-    });
+      taskid: taskId,
+      offset,
+      limit,
+      sort_by: sortBy,
+      sort_direction: sortDirection,
+      filter_category: filterCategory,
+      additional: additional.join(',')
+    }, { timeoutMs: 120000 });
   }
 
   /**
