@@ -16,7 +16,7 @@ export default function TaskDetailScreen({ route }) {
     const [taskInfo, setTaskInfo] = useState(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
-    const [activeTab, setActiveTab] = useState('General'); // General, Transfer, Tracker, Peers, Files
+    const [activeTab, setActiveTab] = useState('Info'); // Info (merged General+Transfer), Tracker, Peers, File
     const [isActionLoading, setIsActionLoading] = useState(false);
     const [peerGeo, setPeerGeo] = useState({}); // { [ip]: { countryCode, flag } }
     const [trackerGeo, setTrackerGeo] = useState({}); // { [host]: { countryCode, flag } }
@@ -184,7 +184,7 @@ export default function TaskDetailScreen({ route }) {
     };
 
     const renderTabs = () => {
-        const tabs = ['General', 'Transfer', 'Tracker', 'Peers', 'File'];
+        const tabs = ['Info', 'Tracker', 'Peers', 'File'];
         return (
             <View style={styles.tabContainer}>
                 {tabs.map(tab => (
@@ -265,22 +265,8 @@ export default function TaskDetailScreen({ route }) {
                         setIsActionLoading(false);
                     }
                 }
-            },
-            {
-                text: 'Remove & Delete Data',
-                style: 'destructive',
-                onPress: async () => {
-                    setIsActionLoading(true);
-                    try {
-                        await downloadStation.deleteTasks([task.id], true);
-                        goBack();
-                    } catch (e) {
-                        Alert.alert('Error', 'Failed to remove task and data: ' + e.message);
-                        setIsActionLoading(false);
-                    }
-                }
             }
-        ]);
+        ], { cancelable: true });
     };
 
     const renderActionBar = (info) => {
@@ -313,75 +299,79 @@ export default function TaskDetailScreen({ route }) {
                     onPress={handleDeleteTask}
                     disabled={isActionLoading}
                 >
-                    <Feather name="trash-2" size={20} color="#FFF" />
-                    <Text style={styles.actionButtonText}>Delete</Text>
+                    <Feather name={isFinished ? "x-circle" : "trash-2"} size={20} color="#FFF" />
+                    <Text style={styles.actionButtonText}>{isFinished ? 'Clear' : 'Delete'}</Text>
                 </TouchableOpacity>
             </View>
         );
     };
 
-    const renderGeneralTab = (info) => (
-        <View style={styles.card}>
-            <View style={styles.infoRow}><Text style={styles.infoLabel}>File name:</Text><Text style={styles.infoValue}>{info.title}</Text></View>
-            <View style={styles.infoRow}><Text style={styles.infoLabel}>Destination:</Text><Text style={styles.infoValue}>{info.destination}</Text></View>
-            <View style={styles.infoRow}><Text style={styles.infoLabel}>File size:</Text><Text style={styles.infoValue}>{formatBytes(info.size)}</Text></View>
-            <View style={styles.infoRow}><Text style={styles.infoLabel}>URL:</Text><Text style={styles.infoValue} numberOfLines={1} ellipsizeMode="tail">{info.uri}</Text></View>
-            <View style={styles.infoRow}><Text style={styles.infoLabel}>Created time:</Text><Text style={styles.infoValue}>{info.createTime ? new Date(info.createTime * 1000).toLocaleString() : 'Unknown'}</Text></View>
-            <View style={styles.infoRow}>
-                <Text style={styles.infoLabel}>Estimated Wait Time:</Text>
-                <Text style={styles.infoValue}>
-                    {info.status === 'downloading' ? 'Not available' : formatEta(info.waitingSeconds)}
-                </Text>
-            </View>
-            <View style={styles.infoRow}><Text style={styles.infoLabel}>Completed Time:</Text><Text style={styles.infoValue}>{info.completedTime ? new Date(info.completedTime * 1000).toLocaleString() : 'Not available'}</Text></View>
-        </View>
-    );
-
-    const renderTransferTab = (info) => {
+    const renderInfoTab = (info) => {
         const progress = info.size > 0 ? (info.sizeDownloaded / info.size) * 100 : 0;
 
-        // Piece layout
-        const pieceSizeStr = info.pieceLength ? ` x ${formatBytes(info.pieceLength)}` : '';
-        const pieceStr = `${info.downloadedPieces} / ${info.totalPieces || 'Not available'}${pieceSizeStr}`;
-
-        // Peers layout
-        let peersStr;
-        if (info.status === 'paused' || info.status === 'finished') {
-            // Unconnected peers are shown when paused/finished in DSM
-            const seeds = Math.max(info.connectedSeeder, info.unconnectedSeeder);
-            const peers = Math.max(info.connectedLeecher, info.unconnectedPeers);
-            peersStr = `${seeds} seeds / ${peers} peers`;
+        // Piece layout logic
+        let pieceStr;
+        if (info.status === 'finished') {
+            pieceStr = info.totalPieces ? `${info.totalPieces} / ${info.totalPieces}` : 'All complete';
+        } else if (info.downloadedPieces === 0 && info.sizeDownloaded > 0 && info.status !== 'hash_checking') {
+            pieceStr = 'Unknown (DSM quirk)';
         } else {
-            peersStr = `${info.connectedSeeder} seeds / ${info.connectedLeecher} leechers`;
+            const pieceSizeStr = info.pieceLength ? ` x ${formatBytes(info.pieceLength)}` : '';
+            pieceStr = `${info.downloadedPieces} / ${info.totalPieces || '?'}${pieceSizeStr}`;
         }
 
-        let etaStr = '-';
+        // Peers: connected count
+        let peersStr;
+        if (info.status === 'paused' || info.status === 'finished') {
+            const seeds = Math.max(info.connectedSeeder || 0, info.unconnectedSeeder || 0);
+            const peers = Math.max(info.connectedLeecher || 0, info.unconnectedPeers || 0);
+            peersStr = `${seeds} seeds / ${peers} peers`;
+        } else {
+            peersStr = `${info.connectedSeeder || 0} seeds / ${info.connectedLeecher || 0} leechers`;
+        }
+
+        // Total peers fallback: if API field empty, use connected count
+        const totalPeers = info.totalPeers || ((info.connectedSeeder || 0) + (info.connectedLeecher || 0)) || null;
+
+        // ETA: active downloads only
+        let etaStr = null;
         if (info.status === 'downloading') {
-            if (info.eta > 0) {
+            if (info.speedDownload > 0 && info.size > 0) {
+                etaStr = formatEta((info.size - info.sizeDownloaded) / info.speedDownload);
+            } else if (info.eta > 0) {
                 etaStr = formatEta(info.eta);
-            } else if (info.speedDownload > 0 && info.size > 0) {
-                const remainingBytes = info.size - info.sizeDownloaded;
-                const seconds = remainingBytes / info.speedDownload;
-                etaStr = formatEta(seconds);
             } else {
                 etaStr = 'Unknown';
             }
+        } else if (info.status === 'waiting' && info.waitingSeconds > 0) {
+            etaStr = `Waiting ~${formatEta(info.waitingSeconds)}`;
         }
 
         return (
             <ScrollView style={styles.tabContent}>
                 <View style={styles.card}>
+                    <View style={styles.infoRow}><Text style={styles.infoLabel}>File name:</Text><Text style={styles.infoValue} numberOfLines={3}>{info.title}</Text></View>
                     <View style={styles.infoRow}><Text style={styles.infoLabel}>Status:</Text><Text style={styles.infoValue}>{info.status}</Text></View>
-                    <View style={styles.infoRow}><Text style={styles.infoLabel}>Transferred (UL/DL):</Text><Text style={styles.infoValue}>{formatBytes(info.sizeUploaded)} / {formatBytes(info.sizeDownloaded)} ({progress.toFixed(1)}%)</Text></View>
-                    <View style={styles.infoRow}><Text style={styles.infoLabel}>Progress:</Text><Text style={styles.infoValue}>{progress.toFixed(1)}%</Text></View>
-                    <View style={styles.infoRow}><Text style={styles.infoLabel}>Speed (UL/DL):</Text><Text style={styles.infoValue}>{formatBytes(info.speedUpload)}/s / {formatBytes(info.speedDownload)}/s</Text></View>
-                    <View style={styles.infoRow}><Text style={styles.infoLabel}>Connected Peers:</Text><Text style={styles.infoValue}>{peersStr}</Text></View>
-                    <View style={styles.infoRow}><Text style={styles.infoLabel}>Total Peers:</Text><Text style={styles.infoValue}>{info.totalPeers || 'Not available'}</Text></View>
-                    <View style={styles.infoRow}><Text style={styles.infoLabel}>Downloaded Pieces:</Text><Text style={styles.infoValue}>{pieceStr}</Text></View>
-                    {info.status === 'downloading' && (
-                        <View style={styles.infoRow}><Text style={styles.infoLabel}>Time Left:</Text><Text style={styles.infoValue}>{etaStr}</Text></View>
+                    <View style={styles.infoRow}><Text style={styles.infoLabel}>File size:</Text><Text style={styles.infoValue}>{formatBytes(info.size)}</Text></View>
+                    <View style={styles.infoRow}><Text style={styles.infoLabel}>Destination:</Text><Text style={styles.infoValue}>{info.destination}</Text></View>
+                    <View style={styles.infoRow}><Text style={styles.infoLabel}>Progress:</Text><Text style={styles.infoValue}>{formatBytes(info.sizeDownloaded)} / {formatBytes(info.size)} ({progress.toFixed(1)}%)</Text></View>
+                    
+                    {info.status !== 'finished' && (
+                        <>
+                            <View style={styles.infoRow}><Text style={styles.infoLabel}>Speed (↓/↑):</Text><Text style={styles.infoValue}>{formatBytes(info.speedDownload)}/s / {formatBytes(info.speedUpload)}/s</Text></View>
+                            {etaStr && <View style={styles.infoRow}><Text style={styles.infoLabel}>Time Left:</Text><Text style={styles.infoValue}>{etaStr}</Text></View>}
+                            <View style={styles.infoRow}><Text style={styles.infoLabel}>Connected Peers:</Text><Text style={styles.infoValue}>{peersStr}</Text></View>
+                            {totalPeers !== null && <View style={styles.infoRow}><Text style={styles.infoLabel}>Total Peers:</Text><Text style={styles.infoValue}>{totalPeers}</Text></View>}
+                        </>
                     )}
-                    <View style={styles.infoRow}><Text style={styles.infoLabel}>Start Time:</Text><Text style={styles.infoValue}>{info.startedTime ? new Date(info.startedTime * 1000).toLocaleString() : 'Unknown'}</Text></View>
+                    
+                    <View style={styles.infoRow}><Text style={styles.infoLabel}>Transfer (↓/↑):</Text><Text style={styles.infoValue}>{formatBytes(info.sizeDownloaded)} / {formatBytes(info.sizeUploaded)}</Text></View>
+                    <View style={styles.infoRow}><Text style={styles.infoLabel}>Downloaded Pieces:</Text><Text style={styles.infoValue}>{pieceStr}</Text></View>
+                    <View style={styles.infoRow}><Text style={styles.infoLabel}>URL:</Text><Text style={styles.infoValue} numberOfLines={1} ellipsizeMode="tail">{info.uri}</Text></View>
+                    
+                    {info.startedTime > 0 && <View style={styles.infoRow}><Text style={styles.infoLabel}>Started:</Text><Text style={styles.infoValue}>{new Date(info.startedTime * 1000).toLocaleString()}</Text></View>}
+                    {info.completedTime > 0 && <View style={styles.infoRow}><Text style={styles.infoLabel}>Completed:</Text><Text style={styles.infoValue}>{new Date(info.completedTime * 1000).toLocaleString()}</Text></View>}
+                    {info.createTime > 0 && !info.startedTime && <View style={styles.infoRow}><Text style={styles.infoLabel}>Created:</Text><Text style={styles.infoValue}>{new Date(info.createTime * 1000).toLocaleString()}</Text></View>}
                 </View>
             </ScrollView>
         );
@@ -403,44 +393,46 @@ export default function TaskDetailScreen({ route }) {
         });
 
         return (
-            <View style={styles.card}>
-                {sortedTrackers.map((tracker, index) => {
-                    let host = '';
-                    let protocol = '';
-                    let port = '';
-                    try {
-                        const url = new URL(tracker.url);
-                        host = url.hostname;
-                        protocol = url.protocol.replace(':', '').toUpperCase();
-                        port = url.port || (protocol === 'HTTPS' ? '443' : protocol === 'HTTP' ? '80' : '');
-                    } catch (e) {
-                        host = tracker.url;
-                    }
-                    const geo = trackerGeo[host];
+            <ScrollView>
+                <View style={styles.card}>
+                    {sortedTrackers.map((tracker, index) => {
+                        let host = '';
+                        let protocol = '';
+                        let port = '';
+                        try {
+                            const url = new URL(tracker.url);
+                            host = url.hostname;
+                            protocol = url.protocol.replace(':', '').toUpperCase();
+                            port = url.port || (protocol === 'HTTPS' ? '443' : protocol === 'HTTP' ? '80' : '');
+                        } catch (e) {
+                            host = tracker.url;
+                        }
+                        const geo = trackerGeo[host];
 
-                    return (
-                        <View key={index} style={styles.listItem}>
-                            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
-                                {geo && <Text style={{ fontSize: 14, marginRight: 6 }}>{geo.flag}</Text>}
-                                <Text style={[styles.listItemTitle, { flex: 1 }]} numberOfLines={1} ellipsizeMode="tail">
-                                    {host}{port ? `:${port}` : ''}
-                                </Text>
-                                <View style={[styles.protocolBadge,
-                                protocol === 'UDP' ? styles.udpBadge :
-                                    protocol === 'HTTPS' ? styles.httpsBadge : styles.httpBadge
-                                ]}>
-                                    <Text style={styles.protocolText}>{protocol}</Text>
+                        return (
+                            <View key={index} style={styles.listItem}>
+                                <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
+                                    {geo && <Text style={{ fontSize: 14, marginRight: 6 }}>{geo.flag}</Text>}
+                                    <Text style={[styles.listItemTitle, { flex: 1 }]} numberOfLines={1} ellipsizeMode="tail">
+                                        {host}{port ? `:${port}` : ''}
+                                    </Text>
+                                    <View style={[styles.protocolBadge,
+                                    protocol === 'UDP' ? styles.udpBadge :
+                                        protocol === 'HTTPS' ? styles.httpsBadge : styles.httpBadge
+                                    ]}>
+                                        <Text style={styles.protocolText}>{protocol}</Text>
+                                    </View>
                                 </View>
+                                <Text style={styles.listItemSub}>
+                                    Status: <Text style={tracker.status?.toLowerCase().includes('success') ? { color: '#4CAF50' } : {}}>{tracker.status}</Text>
+                                    {'  '}|{'  '}<Feather name="arrow-up" size={10} color="#4CAF50" /> {tracker.seeds}
+                                    {'  '}|{'  '}<Feather name="arrow-down" size={10} color="#FF9800" /> {tracker.peers}
+                                </Text>
                             </View>
-                            <Text style={styles.listItemSub}>
-                                Status: <Text style={tracker.status?.toLowerCase().includes('success') ? { color: '#4CAF50' } : {}}>{tracker.status}</Text>
-                                {'  '}|{'  '}<Feather name="arrow-up" size={10} color="#4CAF50" /> {tracker.seeds}
-                                {'  '}|{'  '}<Feather name="arrow-down" size={10} color="#FF9800" /> {tracker.peers}
-                            </Text>
-                        </View>
-                    );
-                })}
-            </View>
+                        );
+                    })}
+                </View>
+            </ScrollView>
         );
     };
 
@@ -449,22 +441,24 @@ export default function TaskDetailScreen({ route }) {
             return <Text style={styles.emptyText}>No peer information available.</Text>;
         }
         return (
-            <View style={styles.card}>
-                {info.peersArray.map((peer, index) => {
-                    const geo = peerGeo[peer.address];
-                    return (
-                        <View key={index} style={styles.listItem}>
-                            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                                {geo && <Text style={{ fontSize: 16, marginRight: 8 }}>{geo.flag}</Text>}
-                                <Text style={styles.listItemTitle}>{peer.address}</Text>
+            <ScrollView>
+                <View style={styles.card}>
+                    {info.peersArray.map((peer, index) => {
+                        const geo = peerGeo[peer.address];
+                        return (
+                            <View key={index} style={styles.listItem}>
+                                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                                    {geo && <Text style={{ fontSize: 16, marginRight: 8 }}>{geo.flag}</Text>}
+                                    <Text style={styles.listItemTitle}>{peer.address}</Text>
+                                </View>
+                                <Text style={styles.listItemSub}>
+                                    Client: {peer.agent} | DL: {formatBytes(peer.speed_download)}/s | UL: {formatBytes(peer.speed_upload)}/s
+                                </Text>
                             </View>
-                            <Text style={styles.listItemSub}>
-                                Client: {peer.agent} | DL: {formatBytes(peer.speed_download)}/s | UL: {formatBytes(peer.speed_upload)}/s
-                            </Text>
-                        </View>
-                    );
-                })}
-            </View>
+                        );
+                    })}
+                </View>
+            </ScrollView>
         );
     };
 
@@ -498,8 +492,7 @@ export default function TaskDetailScreen({ route }) {
         const info = taskInfo || task;
 
         switch (activeTab) {
-            case 'General': return renderGeneralTab(info);
-            case 'Transfer': return renderTransferTab(info);
+            case 'Info': return renderInfoTab(info);
             case 'Tracker': return renderTrackerTab(info);
             case 'Peers': return renderPeersTab(info);
             case 'File': return renderFilesTab();
