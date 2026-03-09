@@ -50,7 +50,7 @@ const withTorrentFileHandler = (config) => {
                 // Add onNewIntent if missing
                 content = content.replace(
                     /}\n$/,
-                    `\n  override fun onNewIntent(intent: Intent?) {\n    TorrentIntentHelper.handleIntent(this, intent)\n    super.onNewIntent(intent)\n  }\n}`
+                    `\n  override fun onNewIntent(intent: Intent) {\n    TorrentIntentHelper.handleIntent(this, intent)\n    super.onNewIntent(intent)\n  }\n}`
                 );
             }
         } else {

@@ -37,17 +37,14 @@ export const NavigationProvider = ({ children }: { children: ReactNode }) => {
             if (history.length > 1) {
                 goBack();
                 return true;
+            } else {
+                // We are at the root screen (TaskList or Login)
+                BackHandler.exitApp();
+                return true;
             }
-            return false;
         };
-        BackHandler.addEventListener('hardwareBackPress', onBackPress);
-        return () => {
-            // In older React Native versions `removeEventListener` may not exist on BackHandler,
-            // it returns a subscription instead.
-            // But standard React Native docs say `addEventListener` returns a NativeSubscription.
-            // For safety, let's just call removeEventListener if it exists, otherwise do nothing
-            // (or use the returned subscription).
-        };
+        const subscription = BackHandler.addEventListener('hardwareBackPress', onBackPress);
+        return () => subscription.remove();
     }, [history]);
 
     return (

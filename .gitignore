@@ -1,3 +1,4 @@
+
 # dependencies
 node_modules/
 
@@ -39,4 +40,7 @@ secrets.txt
 /ios
 /android
 /builds/
-application-*.apk
+
+# Untracked local files
+*.pdf
+*.apk

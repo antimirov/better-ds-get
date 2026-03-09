@@ -62,6 +62,14 @@ export class SynologyClient {
         return this.#sid;
     }
 
+    /**
+     * Restore a session from a saved SID.
+     * @param {string} sid 
+     */
+    setSession(sid) {
+        this.#sid = sid;
+    }
+
     // ── API Discovery ──────────────────────────────────────────────
 
     /**
@@ -263,9 +271,10 @@ export class SynologyClient {
      * @param {string} method - Method name (e.g. "list")
      * @param {number} version - API version
      * @param {Record<string, any>} [params={}] - Additional parameters
+     * @param {Record<string, any>} [options={}] - Request options like timeoutMs
      * @returns {Promise<any>} Response data
      */
-    async request(apiName, method, version, params = {}) {
+    async request(apiName, method, version, params = {}, options = {}) {
         // Look up API path
         const apiInfo = this.#knownApis.get(apiName);
         if (!apiInfo && apiName !== 'SYNO.API.Info') {
@@ -300,7 +309,7 @@ export class SynologyClient {
                 'Content-Type': 'application/x-www-form-urlencoded',
             },
             body: formData.toString(),
-        });
+        }, options.timeoutMs);
 
         const json = await this.#parseJson(response);
 
@@ -308,6 +317,10 @@ export class SynologyClient {
             const code = json.error?.code ?? -1;
             const errors = json.error?.errors;
             throw SynologyError.fromCode(code, apiName, errors);
+        }
+
+        if (apiName === 'SYNO.DownloadStation.BTSearch' && method === 'list') {
+            console.log('--- BTSearch List RAW ---', JSON.stringify(json, null, 2));
         }
 
         return json.data ?? json;

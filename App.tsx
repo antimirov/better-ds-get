@@ -10,6 +10,9 @@ import TaskDetailScreen from './src/screens/TaskDetailScreen';
 import SearchScreen from './src/screens/SearchScreen';
 import { Feather } from '@expo/vector-icons';
 import * as Linking from 'expo-linking';
+import * as Notifications from 'expo-notifications';
+import notifee from '@notifee/react-native';
+import { registerBackgroundFetchAsync } from './src/services/BackgroundTasks';
 
 // --- App content that respects auth state ---
 const MainApp = () => {
@@ -19,6 +22,10 @@ const MainApp = () => {
 
   const handleIncomingUrl = (url: string | null) => {
     if (!url) return;
+
+    // Ignore Expo Go's own dev server URL (exp://host:port) — not a real deep link
+    if (url.startsWith('exp://') && !url.includes('/--/')) return;
+
     console.log('App: Handling incoming URL:', url);
 
     // Clean up Expo Go wrapping (e.g., exp://.../--/magnet:...)
@@ -55,6 +62,22 @@ const MainApp = () => {
       handleIncomingUrl(event.url);
     });
 
+    // Request notification permissions on mount so the user doesn't have to guess
+    const requestPermissions = async () => {
+      const { status } = await Notifications.getPermissionsAsync();
+      if (status !== 'granted') {
+        await Notifications.requestPermissionsAsync();
+      }
+    };
+    requestPermissions();
+
+    // Register Background Task for Notifications
+    if (typeof registerBackgroundFetchAsync === 'function') {
+      registerBackgroundFetchAsync();
+    } else {
+      console.error('App: registerBackgroundFetchAsync is NOT a function!', typeof registerBackgroundFetchAsync);
+    }
+
     return () => {
       subscription.remove();
     };
@@ -74,23 +97,14 @@ const MainApp = () => {
     }
   }, [isConnected, currentScreen, pendingUrl]);
 
-  if (isInitializing) {
-    return (
-      <View style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color="#00A1E4" />
-        <Text style={styles.loadingText}>Restoring session...</Text>
-      </View>
-    );
-  }
-
-  // Router logic
-  const renderScreen = () => {
-    if (!isConnected) return <LoginScreen />;
-    if (currentScreen === 'TaskDetail') return <TaskDetailScreen route={{ params }} />;
-    if (currentScreen === 'Search') return <SearchScreen />;
-    // @ts-ignore - TaskListScreen is JS and TS might not see the route prop
-    return <TaskListScreen route={{ params }} />;
-  };
+    // Router logic
+    const renderScreen = () => {
+        if (!isConnected) return <LoginScreen />;
+        if (currentScreen === 'TaskDetail') return <TaskDetailScreen route={{ params }} />;
+        if (currentScreen === 'Search') return <SearchScreen />;
+        // @ts-ignore - TaskListScreen is JS and TS might not see the route prop
+        return <TaskListScreen route={{ params }} />;
+    };
 
   return (
     <View style={{ flex: 1 }}>
