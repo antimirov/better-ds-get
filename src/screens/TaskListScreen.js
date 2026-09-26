@@ -34,6 +34,7 @@ export default function TaskListScreen({ route }) {
     const [folderPickerMode, setFolderPickerMode] = React.useState('default'); // 'default' or 'addTask'
     const [currentDefaultFolder, setCurrentDefaultFolder] = React.useState('');
     const [selectedAddFolder, setSelectedAddFolder] = React.useState('');
+    const [pendingTorrentFile, setPendingTorrentFile] = React.useState(null);
 
     // File Selection state
     const [selectionModalVisible, setSelectionModalVisible] = useState(false);
@@ -149,12 +150,19 @@ export default function TaskListScreen({ route }) {
     };
 
     const handleDirectTorrentUpload = async (rnFile) => {
+        const fileToUpload = rnFile || pendingTorrentFile;
+        if (!fileToUpload) return;
         setIsAdding(true);
         try {
-            const uploadResult = await sessionManager.execute(() => sessionManager.ds.createTaskFromFile(rnFile, {
-                destination: selectedAddFolder,
+            const destinationFolder = selectedAddFolder || currentDefaultFolder || undefined;
+            const uploadResult = await sessionManager.execute(() => sessionManager.ds.createTaskFromFile(fileToUpload, {
+                destination: destinationFolder,
                 createList: true
             }));
+
+            setPendingTorrentFile(null);
+            setAddModalVisible(false);
+            setIsIntentMode(false);
 
             if (uploadResult.list_id && uploadResult.list_id.length > 0) {
                 const listId = uploadResult.list_id[0];
@@ -199,8 +207,8 @@ export default function TaskListScreen({ route }) {
                 rnFile.type = 'application/x-bittorrent';
             }
 
-            setAddModalVisible(false);
-            await handleDirectTorrentUpload(rnFile);
+            setPendingTorrentFile(rnFile);
+            setIsIntentMode(true);
         } catch (error) {
             Alert.alert('Error', 'Failed to pick torrent: ' + error.message);
         }
@@ -212,16 +220,20 @@ export default function TaskListScreen({ route }) {
         if (autoAddUrl) {
             console.log('Received autoAddUrl:', autoAddUrl);
 
-            // If it's a content URI or file URI, trigger file upload directly
+            // If it's a content URI or file URI, open Add Task modal with folder picker
             if (autoAddUrl.startsWith('file:') || autoAddUrl.startsWith('content:')) {
+                const fileName = decodeURIComponent(autoAddUrl.split('/').pop() || 'upload.torrent');
                 const rnFile = {
                     uri: autoAddUrl,
-                    name: decodeURIComponent(autoAddUrl.split('/').pop() || 'upload.torrent'),
+                    name: fileName,
                     type: 'application/x-bittorrent'
                 };
-                handleDirectTorrentUpload(rnFile);
+                setPendingTorrentFile(rnFile);
+                setIsIntentMode(true);
+                setAddModalVisible(true);
             } else {
                 // Magnet link or custom scheme — show simplified modal (no .torrent upload button)
+                setPendingTorrentFile(null);
                 setIsIntentMode(true);
                 setNewTaskUrl(autoAddUrl);
                 setAddModalVisible(true);
@@ -231,9 +243,12 @@ export default function TaskListScreen({ route }) {
             if (route.params) route.params.autoAddUrl = undefined;
         } else {
             // Not opened via intent — reset intent mode when modal is closed
-            if (!isAddModalVisible) setIsIntentMode(false);
+            if (!isAddModalVisible) {
+                setIsIntentMode(false);
+                setPendingTorrentFile(null);
+            }
         }
-    }, [route?.params?.autoAddUrl, selectedAddFolder]);
+    }, [route?.params?.autoAddUrl]);
 
     // Android Back button: exit to home screen when no modal is open
     useEffect(() => {
@@ -241,6 +256,7 @@ export default function TaskListScreen({ route }) {
             if (isAddModalVisible) {
                 setAddModalVisible(false);
                 setIsIntentMode(false);
+                setPendingTorrentFile(null);
                 return true;
             }
             if (isSettingsModalVisible) {
@@ -542,49 +558,116 @@ export default function TaskListScreen({ route }) {
                 visible={isAddModalVisible}
                 transparent={true}
                 animationType="slide"
-                onRequestClose={() => setAddModalVisible(false)}
+                onRequestClose={() => {
+                    if (!isAdding) {
+                        setAddModalVisible(false);
+                        setIsIntentMode(false);
+                        setPendingTorrentFile(null);
+                    }
+                }}
             >
                 <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.modalContainer}>
                     <View style={styles.modalContent}>
-                        <Text style={styles.modalTitle}>Add New Task</Text>
+                        <Text style={styles.modalTitle}>
+                            {pendingTorrentFile ? 'Add Torrent File' : (isIntentMode ? 'Add Magnet Task' : 'Add New Task')}
+                        </Text>
 
-                        <Text style={styles.modalLabel}>URL or Magnet Link</Text>
-                        <TextInput
-                            style={styles.input}
-                            placeholder="magnet:?xt=urn:btih:..."
-                            placeholderTextColor="#666"
-                            value={newTaskUrl}
-                            onChangeText={setNewTaskUrl}
-                            autoCapitalize="none"
-                            autoCorrect={false}
-                            editable={!isAdding}
-                        />
-                        <TouchableOpacity style={[styles.modalButton, isAdding && styles.buttonDisabled]} onPress={handleAddTaskUrl} disabled={isAdding}>
-                            {isAdding ? <ActivityIndicator color="#FFF" /> : <Text style={styles.modalButtonText}>Download from URL</Text>}
-                        </TouchableOpacity>
+                        {pendingTorrentFile ? (
+                            <View style={{ marginBottom: 16 }}>
+                                <Text style={styles.modalLabel}>Selected Torrent File</Text>
+                                <View style={{
+                                    flexDirection: 'row',
+                                    alignItems: 'center',
+                                    backgroundColor: '#2A2A2A',
+                                    padding: 12,
+                                    borderRadius: 8,
+                                    borderWidth: 1,
+                                    borderColor: '#444'
+                                }}>
+                                    <Feather name="file-text" size={24} color="#00A1E4" style={{ marginRight: 10 }} />
+                                    <View style={{ flex: 1 }}>
+                                        <Text style={{ color: '#FFF', fontSize: 14, fontWeight: '500' }} numberOfLines={2}>
+                                            {pendingTorrentFile.name}
+                                        </Text>
+                                        <Text style={{ color: '#888', fontSize: 11, marginTop: 2 }}>
+                                            Ready to upload
+                                        </Text>
+                                    </View>
+                                </View>
+                            </View>
+                        ) : (
+                            <View style={{ marginBottom: 12 }}>
+                                <Text style={styles.modalLabel}>URL or Magnet Link</Text>
+                                <TextInput
+                                    style={styles.input}
+                                    placeholder="magnet:?xt=urn:btih:..."
+                                    placeholderTextColor="#666"
+                                    value={newTaskUrl}
+                                    onChangeText={setNewTaskUrl}
+                                    autoCapitalize="none"
+                                    autoCorrect={false}
+                                    editable={!isAdding}
+                                />
+                            </View>
+                        )}
 
                         <Text style={styles.modalLabel}>Download Destination</Text>
                         <TouchableOpacity
-                            style={styles.input}
+                            style={[styles.input, { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }]}
                             onPress={() => handleOpenFolderModal('addTask')}
                             disabled={isAdding}
                         >
-                            <Text style={{ color: selectedAddFolder ? '#FFF' : '#666' }}>
-                                {selectedAddFolder || 'Select Folder...'}
-                            </Text>
+                            <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, marginRight: 8 }}>
+                                <Feather name="folder" size={16} color="#00A1E4" style={{ marginRight: 8 }} />
+                                <Text style={{ color: (selectedAddFolder || currentDefaultFolder) ? '#FFF' : '#666', fontSize: 14 }} numberOfLines={1}>
+                                    {selectedAddFolder || (currentDefaultFolder ? `${currentDefaultFolder} (Default)` : 'Select Folder...')}
+                                </Text>
+                            </View>
+                            <Feather name="chevron-right" size={16} color="#888" />
                         </TouchableOpacity>
 
-                        {/* Only show .torrent upload option when NOT launched via external intent */}
-                        {!isIntentMode && (
+                        {/* Action button */}
+                        {pendingTorrentFile ? (
+                            <TouchableOpacity
+                                style={[styles.modalButton, isAdding && styles.buttonDisabled, { marginTop: 12 }]}
+                                onPress={() => handleDirectTorrentUpload(pendingTorrentFile)}
+                                disabled={isAdding}
+                            >
+                                {isAdding ? <ActivityIndicator color="#FFF" /> : <Text style={styles.modalButtonText}>Upload Torrent</Text>}
+                            </TouchableOpacity>
+                        ) : (
+                            <TouchableOpacity
+                                style={[styles.modalButton, isAdding && styles.buttonDisabled, { marginTop: 12 }]}
+                                onPress={handleAddTaskUrl}
+                                disabled={isAdding}
+                            >
+                                {isAdding ? <ActivityIndicator color="#FFF" /> : <Text style={styles.modalButtonText}>Download from URL</Text>}
+                            </TouchableOpacity>
+                        )}
+
+                        {/* Only show .torrent upload option when NOT in intent mode and NO torrent file pending */}
+                        {!isIntentMode && !pendingTorrentFile && (
                             <>
                                 <View style={styles.divider} />
-                                <TouchableOpacity style={[styles.modalButton, styles.secondaryButton, isAdding && styles.buttonDisabled]} onPress={handleAddTorrentFile} disabled={isAdding}>
+                                <TouchableOpacity
+                                    style={[styles.modalButton, styles.secondaryButton, isAdding && styles.buttonDisabled]}
+                                    onPress={handleAddTorrentFile}
+                                    disabled={isAdding}
+                                >
                                     {isAdding ? <ActivityIndicator color="#FFF" /> : <Text style={styles.modalButtonText}>Upload .torrent File</Text>}
                                 </TouchableOpacity>
                             </>
                         )}
 
-                        <TouchableOpacity style={styles.closeModalButton} onPress={() => setAddModalVisible(false)} disabled={isAdding}>
+                        <TouchableOpacity
+                            style={styles.closeModalButton}
+                            onPress={() => {
+                                setAddModalVisible(false);
+                                setIsIntentMode(false);
+                                setPendingTorrentFile(null);
+                            }}
+                            disabled={isAdding}
+                        >
                             <Text style={styles.closeModalText}>Cancel</Text>
                         </TouchableOpacity>
                     </View>

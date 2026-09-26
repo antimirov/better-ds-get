@@ -1,3 +1,4 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import React, { useEffect } from 'react';
 import { View, Text, ActivityIndicator, StyleSheet, StatusBar, BackHandler, TouchableOpacity } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
@@ -48,10 +49,19 @@ const MainApp = () => {
     }
 
     setPendingUrl(targetUrl);
+    AsyncStorage.setItem('pending_intent_url', targetUrl).catch(e => console.warn('App: Failed to persist pending URL:', e));
   };
 
   // Listen for incoming URLs (Deep Linking / Intents)
   useEffect(() => {
+    // Check storage for pending intent URL in case of cold-start delay
+    AsyncStorage.getItem('pending_intent_url').then(saved => {
+      if (saved) {
+        console.log('App: Restored pending intent URL from storage:', saved);
+        setPendingUrl(saved);
+      }
+    }).catch(() => {});
+
     const handleInitialUrl = async () => {
       const url = await Linking.getInitialURL();
       if (url) handleIncomingUrl(url);
@@ -83,17 +93,19 @@ const MainApp = () => {
     };
   }, []);
 
-  // Sync navigation base state with auth state
+  // Sync navigation base state with auth state and deliver queued intents
   useEffect(() => {
-    if (isConnected && currentScreen === 'Login') {
-      navigate('TaskList', pendingUrl ? { autoAddUrl: pendingUrl } : undefined);
-      if (pendingUrl) setPendingUrl(null);
+    if (isConnected) {
+      if (pendingUrl) {
+        console.log('App: User is connected, delivering pendingUrl:', pendingUrl);
+        navigate('TaskList', { autoAddUrl: pendingUrl });
+        setPendingUrl(null);
+        AsyncStorage.removeItem('pending_intent_url').catch(() => {});
+      } else if (currentScreen === 'Login') {
+        navigate('TaskList');
+      }
     } else if (!isConnected && currentScreen !== 'Login') {
       navigate('Login');
-    } else if (isConnected && pendingUrl) {
-      // If already logged in and we receive a URL, force navigation to TaskList with the URL
-      navigate('TaskList', { autoAddUrl: pendingUrl });
-      setPendingUrl(null);
     }
   }, [isConnected, currentScreen, pendingUrl]);
 
