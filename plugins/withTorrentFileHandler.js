@@ -50,7 +50,7 @@ const withTorrentFileHandler = (config) => {
                 // Add onNewIntent if missing
                 content = content.replace(
                     /}\n$/,
-                    `\n  override fun onNewIntent(intent: Intent) {\n    TorrentIntentHelper.handleIntent(this, intent)\n    super.onNewIntent(intent)\n  }\n}`
+                    `\n  override fun onNewIntent(intent: Intent) {\n    TorrentIntentHelper.handleIntent(this, intent)\n    setIntent(intent)\n    super.onNewIntent(intent)\n  }\n}`
                 );
             }
         } else {
@@ -112,7 +112,9 @@ const withTorrentIntentHelper = (config) => {
 import android.app.Activity;
 import android.content.ContentResolver;
 import android.content.Intent;
+import android.database.Cursor;
 import android.net.Uri;
+import android.provider.OpenableColumns;
 import android.util.Log;
 
 import java.io.File;
@@ -134,14 +136,50 @@ public class TorrentIntentHelper {
         if ("content".equalsIgnoreCase(scheme)) {
             String type = intent.getType();
             String path = uri.getPath();
+            String uriStr = uri.toString().toLowerCase();
+
             boolean isTorrent = (path != null && path.toLowerCase().endsWith(".torrent")) || 
-                               (type != null && type.toLowerCase().contains("bittorrent"));
+                               (type != null && type.toLowerCase().contains("bittorrent")) ||
+                               uriStr.endsWith(".torrent") ||
+                               uriStr.contains(".torrent");
+
+            String resolvedName = null;
+
+            // Query ContentResolver for displayName to support opaque content URIs (e.g. Firefox downloads)
+            try {
+                ContentResolver resolver = activity.getContentResolver();
+                Cursor cursor = resolver.query(uri, new String[]{OpenableColumns.DISPLAY_NAME}, null, null, null);
+                if (cursor != null) {
+                    try {
+                        if (cursor.moveToFirst()) {
+                            int nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME);
+                            if (nameIndex >= 0) {
+                                resolvedName = cursor.getString(nameIndex);
+                                if (resolvedName != null && resolvedName.toLowerCase().endsWith(".torrent")) {
+                                    isTorrent = true;
+                                }
+                            }
+                        }
+                    } finally {
+                        cursor.close();
+                    }
+                }
+            } catch (Exception e) {
+                Log.w(TAG, "Could not query OpenableColumns: " + e.getMessage());
+            }
+
+            // Fallback for ACTION_VIEW on octet-stream matched by our intent filters
+            if (!isTorrent && Intent.ACTION_VIEW.equals(intent.getAction())) {
+                if ("application/octet-stream".equalsIgnoreCase(type) || "application/x-bittorrent".equalsIgnoreCase(type)) {
+                    isTorrent = true;
+                }
+            }
 
             if (isTorrent) {
-                Log.i(TAG, "Intercepting torrent content URI: " + uri.toString());
+                Log.i(TAG, "Intercepting torrent content URI: " + uri.toString() + " (name=" + resolvedName + ")");
                 
                 try {
-                    File localFile = copyToCache(activity, uri);
+                    File localFile = copyToCache(activity, uri, resolvedName);
                     if (localFile != null) {
                         Log.i(TAG, "Swapping Intent data to: file://" + localFile.getAbsolutePath());
                         intent.setData(Uri.fromFile(localFile));
@@ -153,9 +191,18 @@ public class TorrentIntentHelper {
         }
     }
 
-    private static File copyToCache(Activity activity, Uri contentUri) throws Exception {
+    private static File copyToCache(Activity activity, Uri contentUri, String preferredName) throws Exception {
         ContentResolver resolver = activity.getContentResolver();
-        String fileName = "intent_upload_" + System.currentTimeMillis() + ".torrent";
+        String fileName = preferredName;
+        if (fileName == null || fileName.trim().isEmpty()) {
+            fileName = "intent_upload_" + System.currentTimeMillis() + ".torrent";
+        } else if (!fileName.toLowerCase().endsWith(".torrent")) {
+            fileName = fileName + ".torrent";
+        }
+
+        // Sanitize file name to avoid directory traversal
+        fileName = new File(fileName).getName();
+
         File cacheFile = new File(activity.getCacheDir(), fileName);
 
         try (InputStream is = resolver.openInputStream(contentUri);

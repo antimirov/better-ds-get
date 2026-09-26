@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.5.0] - 2026-09-26
+
+### Added
+- **Torrent Intent Destination Selection**: Opening `.torrent` files from external applications (such as Firefox, Chrome, or file managers) now opens the Add Task modal with the destination folder selector, allowing you to select or change the download folder before uploading instead of forcing the default share.
+- **Cold-Start & Auth Intent Queue**: Incoming intent URLs and torrent files are now reliably queued across the entire startup lifecycle, persisting through cold-start delays, authentication, and two-factor MFA prompts without dropping tasks.
+- **Enhanced Torrent Content URI Detection**: Native `TorrentIntentHelper` now resolves file display names via `OpenableColumns.DISPLAY_NAME` from Android's `ContentResolver`, ensuring torrent files from opaque download providers (e.g. Firefox download manager) are properly detected and copied to cache.
+- **Native Background Timer**: Integrated `react-native-background-timer` to ensure foreground speed tracking and live speedometer notifications survive Android Doze and deep sleep states.
+
+### Changed
+- **Decoupled Notification & Polling Loop**: The notification clock now updates continuously every 3 seconds independently of network requests, preventing notification freezes while waiting for slow NAS responses.
+- **Cached Synology Client**: Background checks now reuse the API discovery cache and client instance, reducing network round-trip overhead by over 50%.
+- **Updated onNewIntent Intent Handling**: Added `setIntent(intent)` in `MainActivity` to ensure warm-start intents update Android activity state reliably.
+
+### Fixed
+- **Unknown Status 14**: Mapped Synology Download Station's `unknown_14` status code explicitly to "extracting".
+- **Intent Upload Error Handling**: If an intent upload fails, the modal remains open with clear feedback rather than silently discarding the task.
+
 ## [1.4.0] - 2026-03-08
 
 ### Added
