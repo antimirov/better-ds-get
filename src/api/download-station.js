@@ -94,26 +94,27 @@ export class DownloadStation {
    * @param {number} [options.offset=0] - Pagination offset
    * @param {number} [options.limit=-1] - Max results (-1 = all)
    * @param {string[]} [options.additional] - Extra info fields: "detail", "transfer", "file", "tracker", "peer"
+   * @param {number} [options.timeoutMs] - Network timeout in milliseconds
    * @returns {Promise<TaskListResult>}
    */
   async listTasks(options = {}) {
-    const { offset = 0, limit = -1, additional = ['detail', 'transfer'] } = options;
+    const { offset = 0, limit = -1, additional = ['detail', 'transfer'], timeoutMs } = options;
 
     if (this.#client.supportsDS2) {
-      return this.#listTasksDS2(offset, limit, additional);
+      return this.#listTasksDS2(offset, limit, additional, timeoutMs);
     }
-    return this.#listTasksDS1(offset, limit, additional);
+    return this.#listTasksDS1(offset, limit, additional, timeoutMs);
   }
 
   /**
    * List tasks using legacy DS1 API.
    */
-  async #listTasksDS1(offset, limit, additional) {
+  async #listTasksDS1(offset, limit, additional, timeoutMs) {
     const data = await this.#client.request('SYNO.DownloadStation.Task', 'list', 1, {
       offset,
       limit,
       additional: additional.join(','),
-    });
+    }, { timeoutMs });
 
     return {
       total: data.total,
@@ -125,12 +126,12 @@ export class DownloadStation {
   /**
    * List tasks using newer DS2 API.
    */
-  async #listTasksDS2(offset, limit, additional) {
+  async #listTasksDS2(offset, limit, additional, timeoutMs) {
     const data = await this.#client.request('SYNO.DownloadStation2.Task', 'list', 2, {
       offset,
       limit,
       additional: JSON.stringify(additional), // DS2 API may sometimes expect JSON array, but we'll try string format if it fails later
-    });
+    }, { timeoutMs });
 
     return {
       total: data.total,
@@ -518,6 +519,9 @@ export class DownloadStation {
     10: 'extracting',
     11: 'extracting',
     12: 'extracting',
+    13: 'extracting',
+    14: 'extracting',
+    15: 'extracting',
     100: 'error',
     101: 'network_error',
     102: 'permission_denied',

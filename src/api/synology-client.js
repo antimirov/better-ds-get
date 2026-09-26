@@ -7,6 +7,7 @@
  *   - API path auto-discovery via SYNO.API.Info
  */
 import * as FileSystem from 'expo-file-system/legacy';
+import BackgroundTimer from 'react-native-background-timer';
 
 export class SynologyClient {
     /** @type {string} Base URL of the Synology NAS (e.g. "https://nas.local:5001") */
@@ -509,14 +510,16 @@ export class SynologyClient {
         this.#abortController = new AbortController();
         const { signal } = this.#abortController;
 
-        const timeoutId = setTimeout(() => this.#abortController?.abort(), timeoutMs);
+        const timeoutId = BackgroundTimer.setTimeout(() => {
+            try { this.#abortController?.abort(); } catch(e) {}
+        }, timeoutMs);
 
         try {
             const response = await fetch(url, { ...options, signal });
-            clearTimeout(timeoutId);
+            BackgroundTimer.clearTimeout(timeoutId);
             return response;
         } catch (error) {
-            clearTimeout(timeoutId);
+            BackgroundTimer.clearTimeout(timeoutId);
             if (error.name === 'AbortError') {
                 throw new NetworkError('Request timed out', 'TIMEOUT');
             }

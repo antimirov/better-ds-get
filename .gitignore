@@ -43,3 +43,5 @@ secrets.txt
 # Untracked local files
 *.pdf
 *.apk
+
+.vscode/
