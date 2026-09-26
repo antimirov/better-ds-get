@@ -1,3 +1,16 @@
+# Don't commit this block
+decompiled_apktool/
+decompiled_jadx/
+com.synology.DSdownload_*.apk
+REVERSE_ENGINEERING.md
+HANDOFF.md
+MEMORY.md
+memory/
+*.torrent
+rutracker_syno_search
+captured_queries.txt
+btsearch_investigation/
+# End of block to ignore
 
 # dependencies
 node_modules/
@@ -44,3 +57,5 @@ secrets.txt
 # Untracked local files
 *.pdf
 *.apk
+
+.vscode/

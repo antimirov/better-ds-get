@@ -27,6 +27,7 @@ All notable changes to this project will be documented in this file.
 - **Back Button**: Pressing Android Back on the main screen now exits the app to the home screen rather than doing nothing.
 
 ### Fixed
+- **Unknown Status**: Mapped the Synology `unknown_14` status code explicitly to "extracting".
 - **Repeated Search Degradation**: Searching the same query multiple times progressively returned fewer results (down to 0). Root cause: `btSearchClean` was fire-and-forgotten concurrently with `btSearchStart`, causing a NAS-side race. Cleanup is now `await`-ed before starting a new search.
 - **Per-Engine Progress Always "0/N done"**: A field-name mismatch — the app looked up engines by `name`, but the NAS uses `id` (e.g. `the_pirate_bay`). Fixed with `id → name → displayname` fallback.
 - **Engine Status Synthesis**: For NAS versions that don't return per-engine status, the app now synthesizes it by counting `module_id` occurrences in results. An engine is marked "Finished" as soon as it returns ≥1 result.

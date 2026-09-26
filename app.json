@@ -32,7 +32,8 @@
         "RECEIVE_BOOT_COMPLETED",
         "WAKE_LOCK",
         "FOREGROUND_SERVICE",
-        "FOREGROUND_SERVICE_DATA_SYNC"
+        "FOREGROUND_SERVICE_DATA_SYNC",
+        "POST_NOTIFICATIONS"
       ],
       "intentFilters": [
         {

@@ -1,6 +1,7 @@
 import * as Notifications from 'expo-notifications';
 import * as TaskManager from 'expo-task-manager';
 import * as BackgroundFetch from 'expo-background-fetch';
+import BackgroundTimer from 'react-native-background-timer';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { DownloadStation } from '../api/download-station';
 import { SynologyClient } from '../api/synology-client';
@@ -11,7 +12,9 @@ const BACKGROUND_FETCH_TASK = 'BACKGROUND_FETCH_TASK';
 const FOREGROUND_NOTIFICATION_ID = 'smart-foreground-service';
 const FOREGROUND_CHANNEL_ID = 'smart-downloads';
 
-// In-memory state for the foreground service removed (Headless JS and UI thread don't share variables reliably)
+// Global cache to avoid heavy discoverApis() calls every 3 seconds
+let cachedSynologyClient = null;
+let cachedNasUrl = null;
 
 // Configure expo-notifications behavior for standard push
 Notifications.setNotificationHandler({
@@ -34,69 +37,86 @@ notifee.onBackgroundEvent(async ({ type, detail }) => {
 export const notifeeForegroundServiceRunner = async (notification) => {
   return new Promise((resolve) => {
     let shouldRun = true;
+    let isChecking = false;
+    
+    // State for the decoupled UI ticker
+    let displayActiveCount = 0;
+    let displaySpeedText = '0 KB/s';
+    let displayError = null;
 
     // We MUST handle cancellation gracefully
     notifee.onForegroundEvent(({ type, detail }) => {
-      // If Notifee says the user interacted with the notification or the OS wants it gone
       if (type === 0 /* EventType.DISMISSED */ || type === 2 /* EventType.ACTION_PRESS */) {
         console.log('[SmartService] Notification interaction detected (type ' + type + ').');
-        // We only stop if they actually swipe it away (which ongoing:true should prevent anyway)
       }
     });
 
-    const runLoop = async () => {
+    const runLoop = () => {
       console.log('[SmartService] Headless task started.');
-      // Loop until conditions stop matching
-      while (shouldRun) {
+      
+      const doNetworkCheck = async () => {
+        if (!shouldRun) return;
+        if (isChecking) return;
+        isChecking = true;
+
         try {
-          let timerId;
-          const timeoutPromise = new Promise((_, reject) => {
-            timerId = setTimeout(() => reject(new Error('Background task timed out')), 15000);
-          });
+          const result = await checkSynologyTasks(false); // pass false so it returns data silently
           
-          try {
-            const result = await Promise.race([
-              checkSynologyTasks(true, notification.id || FOREGROUND_NOTIFICATION_ID),
-              timeoutPromise
-            ]);
-            clearTimeout(timerId);
-            
-            const lastTimeStr = await AsyncStorage.getItem('last_interaction_time');
-            const interactionTime = lastTimeStr ? parseInt(lastTimeStr, 10) : Date.now();
-            const timeSinceInteraction = Date.now() - interactionTime;
-            const gracePeriodActive = timeSinceInteraction < 5 * 60 * 1000;
-            
-            // Stay alive if there's active downloading OR we are in the 5m grace period
-            // If the notification explicitly failed to start due to Android 14 blocks, result.isActive will be false.
-            if (!result.isActive && (!gracePeriodActive || !result.isActive)) {
-              console.log('[SmartService] No active tasks or foreground service is dead. Stopping.');
-              shouldRun = false;
-            }
-          } catch (innerErr) {
-            clearTimeout(timerId);
-            if (innerErr.message && innerErr.message.includes('ForegroundServiceStartNotAllowedException')) {
-                console.log('[SmartService] Inner loop terminating: Foreground Service access denied.');
-                shouldRun = false;
-            } else {
-                console.error('[SmartService] Inner loop execution error:', innerErr);
-            }
+          displayActiveCount = result.activeCount || 0;
+          displaySpeedText = result.speedText || '0 KB/s';
+          displayError = null;
+          
+          const lastTimeStr = await AsyncStorage.getItem('last_interaction_time');
+          const interactionTime = lastTimeStr ? parseInt(lastTimeStr, 10) : Date.now();
+          const timeSinceInteraction = Date.now() - interactionTime;
+          const gracePeriodActive = timeSinceInteraction < 5 * 60 * 1000;
+          
+          if (!result.isActive && !gracePeriodActive) {
+            console.log('[SmartService] No active tasks and grace period over. Stopping.');
+            shouldRun = false;
           }
         } catch (err) {
-          console.error('[SmartService] Critical loop error:', err);
+          console.error('[SmartService] Network check error:', err);
+          displayError = 'Offline/Wait';
+        } finally {
+          isChecking = false;
         }
-        
-        if (shouldRun) {
-          await new Promise(r => setTimeout(r, 3000)); // 3-second polling loop
-        }
-      }
+      };
+
+      // Run immediately once
+      doNetworkCheck();
       
-      console.log('[SmartService] Headless task loop finished.');
-      // We broke the loop, stop the service and resolve the main Promise to let the OS clean up
-      await notifee.stopForegroundService();
-      // Crucial: The OS stops the service, but might leave the notification hanging as swipeable.
-      // We must explicitly cancel the notification UI so it disappears.
-      await notifee.cancelNotification(notification.id || FOREGROUND_NOTIFICATION_ID);
-      resolve();
+      // Schedule the native-backed background timer every 3 seconds to unconditionally tick the UI
+      BackgroundTimer.runBackgroundTimer(async () => {
+         if (!shouldRun) {
+            BackgroundTimer.stopBackgroundTimer();
+            console.log('[SmartService] Headless task loop finished.');
+            await notifee.stopForegroundService();
+            await notifee.cancelNotification(notification.id || FOREGROUND_NOTIFICATION_ID);
+            resolve();
+            return;
+         }
+
+         const nowStr = new Date().toLocaleTimeString('en-US', { hour12: false });
+         let bodyText;
+         if (displayError) {
+             bodyText = `[${nowStr}] ${displayActiveCount} task(s) (NAS busy...)`;
+         } else if (displayActiveCount > 0 || displaySpeedText !== '0 KB/s') {
+             bodyText = `[${nowStr}] ${displayActiveCount} active task${displayActiveCount === 1 ? '' : 's'} (${displaySpeedText})`;
+         } else {
+             bodyText = `[${nowStr}] 0 active tasks (Grace period)`;
+         }
+
+         try {
+             await updateNotification(notification.id || FOREGROUND_NOTIFICATION_ID, bodyText);
+         } catch (e) {
+             console.log('[SmartService] Notification update failed completely. Service probably killed by OS. Stopping.');
+             shouldRun = false;
+         }
+
+         // Fire off the background check (it ignores if already checking)
+         doNetworkCheck();
+      }, 3000);
     };
 
     runLoop();
@@ -211,17 +231,25 @@ async function checkSynologyTasks(isForeground, notificationId = null) {
 
   let currentTasks = [];
   try {
-    const client = new SynologyClient(settings.nasUrl);
-    client.setSession(session.sid);
-    await client.discoverApis();
+    if (!cachedSynologyClient || cachedNasUrl !== settings.nasUrl) {
+      cachedSynologyClient = new SynologyClient(settings.nasUrl);
+      cachedNasUrl = settings.nasUrl;
+    }
+    cachedSynologyClient.setSession(session.sid);
+
+    // Only discover APIs once to save 50% of the network overhead
+    if (cachedSynologyClient.knownApiNames.length === 0) {
+      await cachedSynologyClient.discoverApis();
+    }
     
-    const ds = new DownloadStation(client);
-    const result = await ds.listTasks({ limit: -1, additional: ['transfer'] });
+    const ds = new DownloadStation(cachedSynologyClient);
+    const result = await ds.listTasks({ limit: -1, additional: ['transfer'], timeoutMs: 15000 });
     currentTasks = result.tasks || [];
   } catch (apiErr) {
     console.error('[SmartService] Synology API Error during background check:', apiErr);
     if (isForeground && notificationId) {
-      await updateNotification(notificationId, `API Error: ${apiErr.message}`);
+      const nowStr = new Date().toLocaleTimeString('en-US', { hour12: false });
+      await updateNotification(notificationId, `[${nowStr}] API Error: ${apiErr.message}`);
     }
     return { isActive: false, newData: false };
   }
@@ -284,53 +312,40 @@ async function checkSynologyTasks(isForeground, notificationId = null) {
     });
   }
 
-  // Update Foreground Sticky Notification
-  let notificationSuccess = true;
-  if (isForeground && notificationId) {
-    const bodyText = activeCount > 0 
-      ? `${activeCount} active task${activeCount === 1 ? '' : 's'} (${formatSpeed(totalDlSpeed)})`
-      : `0 active tasks (Grace period)`;
-      
-    try {
-      await updateNotification(notificationId, bodyText);
-    } catch (e) {
-      if (e.message && e.message.includes('ForegroundServiceStartNotAllowedException')) {
-        notificationSuccess = false;
-      }
-    }
-  }
-
   return { 
-    isActive: notificationSuccess && (totalDlSpeed > 0 || activeCount > 0), 
-    newData: finished.length > 0 || errored.length > 0 
+    isActive: totalDlSpeed > 0, 
+    newData: finished.length > 0 || errored.length > 0,
+    activeCount: activeCount,
+    speedText: formatSpeed(totalDlSpeed)
   };
 }
 
 // Helper to quickly update the sticky notification consistently
 async function updateNotification(notificationId, bodyText) {
+  const dataSyncType = AndroidForegroundServiceType?.DATA_SYNC ?? AndroidForegroundServiceType?.FOREGROUND_SERVICE_TYPE_DATA_SYNC ?? 1;
+  const notificationOptions = {
+    id: notificationId,
+    title: 'Better DS Get',
+    body: bodyText,
+    android: {
+      channelId: FOREGROUND_CHANNEL_ID,
+      asForegroundService: true,
+      ongoing: true, // Keep it sticky
+      foregroundServiceTypes: [dataSyncType],
+      pressAction: { id: 'default' },
+    },
+  };
+
   try {
-    const dataSyncType = AndroidForegroundServiceType?.DATA_SYNC ?? AndroidForegroundServiceType?.FOREGROUND_SERVICE_TYPE_DATA_SYNC ?? 1;
-    await notifee.displayNotification({
-      id: notificationId,
-      title: 'Better DS Get',
-      body: bodyText,
-      android: {
-        channelId: FOREGROUND_CHANNEL_ID,
-        asForegroundService: true,
-        ongoing: true, // Keep it sticky
-        foregroundServiceTypes: [dataSyncType],
-        pressAction: {
-          id: 'default',
-        },
-      },
-    });
+    await notifee.displayNotification(notificationOptions);
   } catch (err) {
     if (err.message && err.message.includes('ForegroundServiceStartNotAllowedException')) {
-      console.log('[SmartService] updateNotification skipped: Foreground Service locked/dismissed by OS or User.');
-      // We throw so the loop can exit immediately since its UI is gone
-      throw err; 
+      console.log('[SmartService] Caught ForegroundServiceStartNotAllowedException updating from background. Retrying as standard update.');
+      notificationOptions.android.asForegroundService = false;
+      await notifee.displayNotification(notificationOptions);
     } else {
       console.error('[SmartService] updateNotification error:', err);
+      throw err;
     }
   }
 }
