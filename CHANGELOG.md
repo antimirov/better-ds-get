@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.5.1] - 2026-11-06
+
+### Changed
+- **Respect DSM User-Configured Search Engines**: BT Search now uses `module: 'enabled'` and discovers user-specific engine configurations via `SYNO.DownloadStation2.Settings.BTSearch`, avoiding dead or disabled plugins.
+- **Settings & Actions Layout**: Optimized the Settings modal layout to fit without scrolling. Moved the app information to a dedicated "About Better DS Get" modal with a single clean version indicator.
+
+### Fixed
+- **Concurrent Request Abort & Timeout Isolation**: Replaced the shared client abort controller with an isolated set of per-request abort controllers, preventing background download tracking from interrupting active search requests.
+- **Search Engine Result Attribution**: Enhanced result counting and engine progress tracking across different module ID formats returned by DSM 7.
+
 ## [1.5.0] - 2026-09-26
 
 ### Added

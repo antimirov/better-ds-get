@@ -3,6 +3,8 @@ import { useSynology } from './useSynology';
 
 const SearchContext = createContext(undefined);
 
+const isModuleEnabled = (m) => m.enabled === undefined ? true : (m.enabled === true || m.enabled === 'true' || m.enabled === 1 || m.enabled === '1');
+
 export const useSearch = () => {
     const context = useContext(SearchContext);
     if (!context) throw new Error('useSearch must be used within SearchProvider');
@@ -81,7 +83,7 @@ export const SearchProvider = ({ children }) => {
 
             // If NAS didn't provide explicit module status, synthesize it from current engines + item counts
             setEngineStatus(prevStatus => {
-                const nextStatus = prevStatus.length > 0 ? [...prevStatus] : modules.map(m => ({
+                const nextStatus = prevStatus.length > 0 ? [...prevStatus] : modules.filter(isModuleEnabled).map(m => ({
                     module: m.id || m.name || m.displayname,
                     module_title: m.title || m.displayname || m.name || m.id,
                     status: 'searching',
@@ -97,7 +99,7 @@ export const SearchProvider = ({ children }) => {
                 });
 
                 const updatedStatus = nextStatus.map(e => {
-                    const count = counts[e.module] || 0;
+                    const count = counts[e.module] || counts[e.module_title] || 0;
                     const isTaskFinished = data.finished === true;
                     const engineWasFinished = e.status === 'finished' || e.status === 'complete' || count > 0;
                     
@@ -152,12 +154,15 @@ export const SearchProvider = ({ children }) => {
                 const data = await downloadStation.btSearchGetModules();
                 if (data?.modules) {
                     currentModules = data.modules;
-                    setModules(data.modules);
+                    setModules(currentModules);
                 }
             } catch (e) {
                 console.warn('Failed to load modules during startSearch:', e);
             }
         }
+
+        // Filter enabled modules
+        const enabledModules = currentModules.filter(isModuleEnabled);
 
         // Capture old taskId before state updates clear it
         const oldTaskId = taskId;
@@ -167,8 +172,7 @@ export const SearchProvider = ({ children }) => {
         setResults([]);
         
         // Reset engine status instead of clearing it, so UI shows "0/N done"
-        if (currentModules.length > 0) {
-            const enabledModules = currentModules.filter(m => m.enabled !== false);
+        if (enabledModules.length > 0) {
             setEngineStatus(enabledModules.map(m => ({
                 module: m.id || m.name || m.displayname,
                 module_title: m.title || m.displayname || m.name || m.id,
@@ -189,9 +193,9 @@ export const SearchProvider = ({ children }) => {
         }
 
         try {
-            console.log(`[useSearch] Starting new search for: "${query.trim()}"`);
+            console.log(`[useSearch] Starting new search for: "${query.trim()}" with modules: "enabled"`);
             const startReqTime = Date.now();
-            const res = await downloadStation.btSearchStart(query.trim());
+            const res = await downloadStation.btSearchStart(query.trim(), 'enabled');
             console.log(`[useSearch] Start response in ${Date.now() - startReqTime}ms:`, JSON.stringify(res));
             
             if (res && res.taskid) {
@@ -240,13 +244,14 @@ export const SearchProvider = ({ children }) => {
             downloadStation.btSearchGetModules().then(data => {
                 console.log('[useSearch] Loaded modules:', JSON.stringify(data?.modules, null, 2));
                 if (data && data.modules) {
-                    const enabledModules = data.modules.filter(m => m.enabled !== false);
                     setModules(data.modules);
+                    const enabledModules = data.modules.filter(isModuleEnabled);
                     // Initialize engine status so we don't stay on "Initializing..."
                     setEngineStatus(enabledModules.map(m => ({ 
                         module: m.id || m.name || m.displayname,
                         module_title: m.title || m.displayname || m.name || m.id,
-                        status: 'waiting' 
+                        status: 'waiting',
+                        items: 0
                     })));
                 }
             }).catch(e => console.error('Failed to load search modules:', e));

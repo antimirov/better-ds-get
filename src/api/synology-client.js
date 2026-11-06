@@ -22,8 +22,8 @@ export class SynologyClient {
     /** @type {boolean} Whether API discovery has been performed */
     #apisDiscovered = false;
 
-    /** @type {AbortController|null} For cancelling in-flight requests */
-    #abortController = null;
+    /** @type {Set<AbortController>} Active in-flight request abort controllers */
+    #activeControllers = new Set();
 
     /** @type {string} Session name for SYNO.API.Auth */
     #sessionName = 'DownloadStation';
@@ -493,8 +493,10 @@ export class SynologyClient {
      * Cancel all in-flight requests.
      */
     abort() {
-        this.#abortController?.abort();
-        this.#abortController = null;
+        for (const controller of this.#activeControllers) {
+            try { controller.abort(); } catch(e) {}
+        }
+        this.#activeControllers.clear();
     }
 
     // ── Private Helpers ──────────────────────────────────────────────
@@ -507,11 +509,12 @@ export class SynologyClient {
      * @returns {Promise<Response>}
      */
     async #fetchWithTimeout(url, options = {}, timeoutMs = 15000) {
-        this.#abortController = new AbortController();
-        const { signal } = this.#abortController;
+        const controller = new AbortController();
+        this.#activeControllers.add(controller);
+        const { signal } = controller;
 
         const timeoutId = BackgroundTimer.setTimeout(() => {
-            try { this.#abortController?.abort(); } catch(e) {}
+            try { controller.abort(); } catch(e) {}
         }, timeoutMs);
 
         try {
@@ -524,6 +527,8 @@ export class SynologyClient {
                 throw new NetworkError('Request timed out', 'TIMEOUT');
             }
             throw new NetworkError(error.message, 'NETWORK');
+        } finally {
+            this.#activeControllers.delete(controller);
         }
     }
 
@@ -535,10 +540,14 @@ export class SynologyClient {
         try {
             return JSON.parse(text);
         } catch (e) {
+            console.warn(`[#parseJson] Failed to parse JSON from ${response.url || 'request'} (HTTP ${response.status}):`, text.substring(0, 200));
             if (text.toLowerCase().includes('400 bad request')) {
                 throw new SynologyError('400 Bad Request: You might be sending an HTTP request to an HTTPS port (5001). Try using https:// or port 5000.', -1);
             }
-            throw new SynologyError(`Server returned non-JSON response. Check your URL and port. Response start: ${text.substring(0, 40)}`, -1);
+            if (response.status === 504 || text.toLowerCase().includes('gateway time-out')) {
+                throw new SynologyError('504 Gateway Time-out: NAS search engine took too long to respond.', -1);
+            }
+            throw new SynologyError(`Server returned non-JSON response (HTTP ${response.status}). Response start: ${text.substring(0, 40)}`, -1);
         }
     }
 

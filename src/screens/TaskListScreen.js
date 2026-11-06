@@ -27,6 +27,7 @@ export default function TaskListScreen({ route }) {
     // Settings Modal state
     const [isSettingsModalVisible, setSettingsModalVisible] = useState(false);
     const [isInfoModalVisible, setInfoModalVisible] = useState(false);
+    const [isAboutModalVisible, setAboutModalVisible] = useState(false);
     const [isActionLoading, setIsActionLoading] = useState(false);
 
     // Folder Picker State
@@ -481,6 +482,47 @@ export default function TaskListScreen({ route }) {
         );
     };
 
+    const handleCloseAbout = () => {
+        setAboutModalVisible(false);
+        setSettingsModalVisible(true);
+    };
+
+    const renderAboutModal = () => (
+        <Modal
+            visible={isAboutModalVisible}
+            transparent={true}
+            animationType="fade"
+            onRequestClose={handleCloseAbout}
+        >
+            <TouchableOpacity 
+                style={styles.modalOverlay}
+                activeOpacity={1}
+                onPressOut={handleCloseAbout}
+            >
+                <TouchableWithoutFeedback>
+                    <View style={styles.settingsModalContent}>
+                        <View style={styles.aboutSection}>
+                            <Image source={require('../../assets/icon.png')} style={{ width: 64, height: 64, borderRadius: 16, marginBottom: 12 }} />
+                            <Text style={styles.aboutTitle}>Better DS Get</Text>
+                            <Text style={styles.aboutLine}>Version {Constants.expoConfig?.version || '—'}</Text>
+                            <Text style={styles.aboutLine}>by Yevgen Antymyrov</Text>
+                            <TouchableOpacity onPress={() => Linking.openURL('mailto:android@antimirov.net')} style={{ marginTop: 6 }}>
+                                <Text style={styles.aboutEmail}>android@antimirov.net</Text>
+                            </TouchableOpacity>
+                        </View>
+
+                        <TouchableOpacity
+                            style={styles.settingsCloseButton}
+                            onPress={handleCloseAbout}
+                        >
+                            <Text style={styles.settingsCloseText}>Close</Text>
+                        </TouchableOpacity>
+                    </View>
+                </TouchableWithoutFeedback>
+            </TouchableOpacity>
+        </Modal>
+    );
+
     const renderTask = ({ item }) => {
         const isDownloading = item.status === 'downloading';
         const progressText = item.size > 0
@@ -688,7 +730,7 @@ export default function TaskListScreen({ route }) {
                 >
                     <TouchableWithoutFeedback>
                         <View style={[styles.settingsModalContent, { maxHeight: '90%' }]}>
-                            <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 10 }}>
+                            <ScrollView showsVerticalScrollIndicator={true} contentContainerStyle={{ paddingBottom: 10 }}>
                                 <Text style={styles.settingsModalTitle}>Settings & Actions</Text>
 
                             <View style={styles.settingsUserInfo}>
@@ -740,7 +782,7 @@ export default function TaskListScreen({ route }) {
                                     <Text style={[styles.settingsActionText, { color: '#00A1E4' }]}>Change Default Download Folder</Text>
                                     {!!currentDefaultFolder && (
                                         <Text style={[styles.settingsActionText, { color: '#888', fontSize: 12, marginTop: 2 }]}>
-                                            Current: {currentDefaultFolder}
+                                             Current: {currentDefaultFolder}
                                         </Text>
                                     )}
                                 </View>
@@ -759,23 +801,27 @@ export default function TaskListScreen({ route }) {
 
                             <View style={styles.settingsDivider} />
 
-                            <TouchableOpacity style={styles.settingsActionRow} onPress={handleLogout}>
-                                <Feather name="log-out" size={20} color="#FF6B6B" />
-                                <Text style={[styles.settingsActionText, { color: '#FF6B6B' }]}>Logout</Text>
+                            <TouchableOpacity 
+                                style={styles.settingsActionRow} 
+                                onPress={() => {
+                                    setSettingsModalVisible(false);
+                                    setAboutModalVisible(true);
+                                }}
+                            >
+                                <Feather name="info" size={20} color="#00A1E4" />
+                                <View style={{ flex: 1, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                                    <Text style={[styles.settingsActionText, { color: '#00A1E4' }]}>About Better DS Get</Text>
+                                    <Text style={{ color: '#888', fontSize: 13, marginRight: 4 }}>v{Constants.expoConfig?.version || '—'}</Text>
+                                </View>
+                                <Feather name="chevron-right" size={16} color="#666" />
                             </TouchableOpacity>
 
                             <View style={styles.settingsDivider} />
 
-                            {/* About section */}
-                            <View style={styles.aboutSection}>
-                                <Image source={require('../../assets/icon.png')} style={{ width: 64, height: 64, borderRadius: 16, marginBottom: 12 }} />
-                                <Text style={styles.aboutTitle}>Better DS Get</Text>
-                                <Text style={styles.aboutLine}>Version {Constants.expoConfig?.version || '—'}</Text>
-                                <Text style={styles.aboutLine}>by Yevgen Antymyrov</Text>
-                                <TouchableOpacity onPress={() => Linking.openURL('mailto:android@antimirov.net')}>
-                                    <Text style={styles.aboutEmail}>android@antimirov.net</Text>
-                                </TouchableOpacity>
-                            </View>
+                            <TouchableOpacity style={styles.settingsActionRow} onPress={handleLogout}>
+                                <Feather name="log-out" size={20} color="#FF6B6B" />
+                                <Text style={[styles.settingsActionText, { color: '#FF6B6B' }]}>Logout</Text>
+                            </TouchableOpacity>
 
                             <TouchableOpacity style={styles.settingsCloseButton} onPress={() => setSettingsModalVisible(false)} disabled={isActionLoading}>
                                 <Text style={styles.settingsCloseText}>Close</Text>
@@ -787,6 +833,7 @@ export default function TaskListScreen({ route }) {
             </Modal>
 
             {renderInfoModal()}
+            {renderAboutModal()}
 
             <FileSelectionModal
                 visible={selectionModalVisible}
@@ -1041,12 +1088,12 @@ const styles = StyleSheet.create({
     settingsDivider: {
         height: 1,
         backgroundColor: '#444',
-        marginVertical: 12,
+        marginVertical: 8,
     },
     settingsActionRow: {
         flexDirection: 'row',
         alignItems: 'center',
-        paddingVertical: 12,
+        paddingVertical: 10,
     },
     settingsActionText: {
         color: '#E0E0E0',
