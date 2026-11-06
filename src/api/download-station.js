@@ -458,9 +458,9 @@ export class DownloadStation {
   /**
    * Start a BT search.
    * @param {string} keyword - Search keyword
-   * @param {string} [module='all'] - Search module
+   * @param {string} [module='enabled'] - Search module ('enabled', 'all', or comma-separated list of IDs)
    */
-  async btSearchStart(keyword, module = 'all') {
+  async btSearchStart(keyword, module = 'enabled') {
     return this.#client.request('SYNO.DownloadStation.BTSearch', 'start', 1, {
       keyword,
       module
@@ -499,7 +499,30 @@ export class DownloadStation {
    * Get available BT search modules (engines).
    */
   async btSearchGetModules() {
-    return this.#client.request('SYNO.DownloadStation.BTSearch', 'getModule', 1);
+    if (this.#client.isApiSupported('SYNO.DownloadStation2.Settings.BTSearch', 1)) {
+      try {
+        const ds2 = await this.#client.request('SYNO.DownloadStation2.Settings.BTSearch', 'list', 1);
+        console.log('[btSearchGetModules] DS2 Settings.BTSearch raw:', JSON.stringify(ds2, null, 2));
+        const plugins = ds2?.plugins || ds2?.data?.plugins;
+        if (Array.isArray(plugins)) {
+          return {
+            modules: plugins.map(p => ({
+              id: p.name,
+              title: p.displayname || p.name,
+              enabled: p.is_enable === true,
+              can_connect: p.can_connect,
+              description: p.description,
+              version: p.version,
+            }))
+          };
+        }
+      } catch (e) {
+        console.warn('[btSearchGetModules] DS2 Settings.BTSearch error:', e);
+      }
+    }
+    const legacy = await this.#client.request('SYNO.DownloadStation.BTSearch', 'getModule', 1);
+    console.log('[btSearchGetModules] Legacy BTSearch raw:', JSON.stringify(legacy, null, 2));
+    return legacy;
   }
 
   // ── Helpers ──────────────────────────────────────────────────
