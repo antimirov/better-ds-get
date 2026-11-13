@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
+    <uses-permission android:name="android.permission.VIBRATE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <application
+        android:allowBackup="true"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:label="@string/app_name"
+        android:networkSecurityConfig="@xml/network_security_config"
+        android:supportsRtl="true"
+        android:theme="@style/AppTheme"
+        android:usesCleartextTraffic="true"
+        android:largeHeap="true">
+
+        <activity
+            android:name=".MainActivity"
+            android:configChanges="orientation|screenSize|keyboardHidden"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:windowSoftInputMode="adjustResize|stateHidden">
+
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+
+            <!-- Magnet and Synology schemes -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="magnet" />
+                <data android:scheme="synodownload" />
+                <data android:scheme="synodownloads" />
+            </intent-filter>
+
+            <!-- BitTorrent MIME types -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:host="*" android:mimeType="application/x-bittorrent" android:scheme="http" />
+                <data android:host="*" android:mimeType="application/x-bittorrent" android:scheme="https" />
+                <data android:mimeType="application/x-bittorrent" android:scheme="file" />
+                <data android:mimeType="application/x-bittorrent" android:scheme="content" />
+                <data android:mimeType="application/octet-stream" android:scheme="file" />
+                <data android:mimeType="application/octet-stream" android:scheme="content" />
+            </intent-filter>
+
+            <!-- .torrent file extension pattern -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:host="*" android:pathPattern=".*\\.torrent" android:scheme="http" />
+                <data android:host="*" android:pathPattern=".*\\.torrent" android:scheme="https" />
+                <data android:pathPattern=".*\\.torrent" android:scheme="file" />
+                <data android:pathPattern=".*\\.torrent" android:scheme="content" />
+            </intent-filter>
+        </activity>
+
+        <service
+            android:name=".service.SmartDownloadService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+    </application>
+
+</manifest>
+

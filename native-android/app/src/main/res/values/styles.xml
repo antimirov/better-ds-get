@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="AppTheme" parent="android:Theme.DeviceDefault.NoActionBar">
+        <item name="android:statusBarColor">#121212</item>
+        <item name="android:navigationBarColor">#1E1E1E</item>
+        <item name="android:windowBackground">#121212</item>
+        <item name="android:colorAccent">#00A1E4</item>
+        <item name="android:colorControlActivated">#00A1E4</item>
+        <item name="android:colorControlHighlight">#4000A1E4</item>
+        <item name="android:textCursorDrawable">@drawable/cursor_cyan</item>
+    </style>
+</resources>
+

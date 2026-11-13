@@ -40,6 +40,13 @@ secrets.txt
 /android
 /builds/
 
+# native-android build outputs
+/native-android/.gradle/
+/native-android/build/
+/native-android/app/build/
+/native-android/local.properties
+*.keystore
+
 # Untracked local files
 *.pdf
 *.apk
