@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.6.0] - 2026-11-22
+
+### Changed
+- **Pure Native Android (Java) Rewrite**: Rewrote the app from React Native / Expo into pure Android Java (`native-android/`) with zero external runtime dependencies, reducing the release APK size from ~61 MB to ~608 KB and eliminating JS bridge cold-start overhead.
+- **Direct In-Memory `.torrent` Multipart Upload**: Replaced base64 temp-file staging with direct in-memory ordered multipart streaming in `SynologyClient`.
+- **UI & Visual Refinements**: Added colored up/down speed arrows and color-coded progress text in the Tasks list, preserved login form fields across 2FA/OTP prompts with an inline Connect spinner, added a `(Default)` label on the default destination folder, and tightened Task Info URL display and file path middle-ellipsizing.
+
+### Added
+- **QuickConnect Roaming Re-Resolution**: Automatically re-resolves QuickConnect IDs on `NetworkError` during session restore or reconnect (e.g., switching between Wi-Fi and cellular), with self-signed HTTPS support on QuickConnect probe connections.
+- **Automated Test Suite**: Added 36 JUnit & `MockWebServer` unit/integration tests covering Synology WebAPI v1/v2 flows, search state machine, `.torrent` intents, and UI invariants.
+
 ## [1.5.1] - 2026-11-06
 
 ### Changed

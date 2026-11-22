@@ -220,4 +220,44 @@ public class TorrentIntentAndFileSelectionTest {
         assertTrue(body.contains("selected=[0,10,50,500,4055]"));
         assertTrue(body.contains("create_subfolder=true"));
     }
+
+    @Test
+    public void testGetFileListFallbackToBtFileEndpoint() throws Exception {
+        // Primary SYNO.DownloadStation2.Task.List get v2 returns empty/no files array
+        server.enqueue(new MockResponse().setResponseCode(200).setBody("{\"success\": true, \"data\": {}}"));
+        // Fallback SYNO.DownloadStation2.Task.BT.File list v2 returns alternate "files" key
+        server.enqueue(new MockResponse().setResponseCode(200).setBody("""
+                {
+                  "success": true,
+                  "data": {
+                    "files": [
+                      {"name": "Ubuntu-24.04.iso", "size": 4831838208, "index": 0},
+                      {"name": "SHA256SUMS", "size": 2048, "index": 1}
+                    ]
+                  }
+                }
+                """));
+
+        List<TaskFileItem> items = ds.getFileList("LIST_FALLBACK_TEST");
+
+        assertEquals(2, items.size());
+        assertEquals("Ubuntu-24.04.iso", items.get(0).name);
+        assertEquals(0, items.get(0).index);
+        assertEquals(4831838208L, items.get(0).size);
+        assertEquals("SHA256SUMS", items.get(1).name);
+        assertEquals(1, items.get(1).index);
+        assertEquals(2048L, items.get(1).size);
+
+        RecordedRequest primaryReq = server.takeRequest();
+        String primaryBody = URLDecoder.decode(primaryReq.getBody().readUtf8(), StandardCharsets.UTF_8.name());
+        assertTrue(primaryBody.contains("api=SYNO.DownloadStation2.Task.List"));
+        assertTrue(primaryBody.contains("method=get"));
+
+        RecordedRequest fallbackReq = server.takeRequest();
+        String fallbackBody = URLDecoder.decode(fallbackReq.getBody().readUtf8(), StandardCharsets.UTF_8.name());
+        assertTrue(fallbackBody.contains("api=SYNO.DownloadStation2.Task"));
+        assertTrue(fallbackBody.contains("method=get"));
+        assertTrue(fallbackBody.contains("additional=file"));
+        assertTrue(fallbackBody.contains("list_id=LIST_FALLBACK_TEST"));
+    }
 }

@@ -2,6 +2,7 @@ package com.antimirov.betterdsget.ui;
 
 import android.app.Activity;
 import android.content.Context;
+import android.content.res.ColorStateList;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
@@ -16,6 +17,7 @@ import android.view.WindowInsetsController;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.EditText;
 import android.widget.LinearLayout;
+import android.widget.Switch;
 import android.widget.TextView;
 
 import com.antimirov.betterdsget.R;
@@ -61,6 +63,30 @@ public final class UiTheme {
         GradientDrawable d = roundedRect(fillColor, radiusPx);
         d.setStroke(strokeWidthPx, strokeColor);
         return d;
+    }
+
+    public static GradientDrawable topRoundedRect(int fillColor, int topRadiusPx) {
+        GradientDrawable d = new GradientDrawable();
+        d.setShape(GradientDrawable.RECTANGLE);
+        d.setColor(fillColor);
+        d.setCornerRadii(new float[]{
+                topRadiusPx, topRadiusPx,
+                topRadiusPx, topRadiusPx,
+                0f, 0f, 0f, 0f
+        });
+        return d;
+    }
+
+    public static void styleSwitch(Switch sw) {
+        if (sw == null) return;
+        int[][] states = new int[][]{
+                new int[]{android.R.attr.state_checked},
+                new int[]{}
+        };
+        int[] thumbColors = new int[]{COLOR_SYNOLOGY_BLUE, Color.parseColor("#F4F3F4")};
+        int[] trackColors = new int[]{Color.parseColor("#6600A1E4"), Color.parseColor("#555555")};
+        sw.setThumbTintList(new ColorStateList(states, thumbColors));
+        sw.setTrackTintList(new ColorStateList(states, trackColors));
     }
 
     public static int statusColor(String status) {
@@ -183,6 +209,10 @@ public final class UiTheme {
     }
 
     public static LinearLayout makeInfoRow(Context ctx, String label, String value) {
+        return makeInfoRow(ctx, label, value, 3);
+    }
+
+    public static LinearLayout makeInfoRow(Context ctx, String label, String value, int maxLines) {
         LinearLayout row = new LinearLayout(ctx);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setPadding(0, dp(ctx, 5), 0, dp(ctx, 5));
@@ -193,7 +223,11 @@ public final class UiTheme {
 
         TextView val = makeText(ctx, value != null ? value : "", 13, COLOR_TEXT_SECONDARY, false);
         val.setGravity(Gravity.END);
-        val.setMaxLines(3);
+        if (maxLines == 1) {
+            val.setSingleLine(true);
+        } else {
+            val.setMaxLines(maxLines);
+        }
         val.setEllipsize(TextUtils.TruncateAt.END);
         LinearLayout.LayoutParams lp2 = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 2f);
         val.setLayoutParams(lp2);

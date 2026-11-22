@@ -23,12 +23,9 @@ import com.antimirov.betterdsget.util.FormatUtils;
 
 import org.json.JSONObject;
 
-import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.Date;
 import java.util.List;
-import java.util.Locale;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -42,6 +39,7 @@ public class SmartDownloadService extends Service {
     private static final String TAG = "SmartDownloadService";
     public static final String CHANNEL_FOREGROUND = "smart_downloads_channel";
     public static final String CHANNEL_ALERTS = "download_alerts_channel";
+    public static final String EXTRA_OPEN_TASKS = "com.antimirov.betterdsget.EXTRA_OPEN_TASKS";
     private static final int NOTIFICATION_ID_FOREGROUND = 1001;
     private static int alertNotificationCounter = 2000;
 
@@ -67,28 +65,6 @@ public class SmartDownloadService extends Service {
             }
         } catch (Exception e) {
             Log.w(TAG, "Could not start SmartDownloadService (likely in background): " + e.getMessage());
-        }
-    }
-
-    public static boolean sendTestNotification(Context context) {
-        try {
-            ensureChannels(context);
-            NotificationManager nm = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
-            if (nm == null) return false;
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && !nm.areNotificationsEnabled()) {
-                return false;
-            }
-            Notification n = new Notification.Builder(context, CHANNEL_ALERTS)
-                    .setSmallIcon(R.drawable.app_icon)
-                    .setContentTitle("🔔 Test Notification")
-                    .setContentText("Notifications are working correctly!")
-                    .setAutoCancel(true)
-                    .build();
-            nm.notify(alertNotificationCounter++, n);
-            return true;
-        } catch (Exception e) {
-            Log.e(TAG, "Failed to send test notification", e);
-            return false;
         }
     }
 
@@ -235,15 +211,14 @@ public class SmartDownloadService extends Service {
     }
 
     private void updateStickyStatus() {
-        String nowStr = new SimpleDateFormat("HH:mm:ss", Locale.US).format(new Date());
         String bodyText;
         if (displayError != null) {
-            bodyText = "[" + nowStr + "] " + displayActiveCount + " task(s) (NAS busy...)";
+            bodyText = displayActiveCount + " task(s) (NAS busy...)";
         } else if (displayActiveCount > 0 || !"0 KB/s".equals(displaySpeedText)) {
             String plural = displayActiveCount == 1 ? "" : "s";
-            bodyText = "[" + nowStr + "] " + displayActiveCount + " active task" + plural + " (" + displaySpeedText + ")";
+            bodyText = displayActiveCount + " active task" + plural + " (" + displaySpeedText + ")";
         } else {
-            bodyText = "[" + nowStr + "] 0 active tasks (Grace period)";
+            bodyText = "0 active tasks";
         }
 
         NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
@@ -252,36 +227,41 @@ public class SmartDownloadService extends Service {
         }
     }
 
-    private Notification buildStickyNotification(String bodyText) {
+    private PendingIntent createOpenAppPendingIntent(int requestCode) {
         Intent openIntent = new Intent(this, MainActivity.class);
         openIntent.setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
-        PendingIntent pi = PendingIntent.getActivity(
+        openIntent.putExtra(EXTRA_OPEN_TASKS, true);
+        return PendingIntent.getActivity(
                 this,
-                0,
+                requestCode,
                 openIntent,
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
         );
+    }
 
+    private Notification buildStickyNotification(String bodyText) {
         return new Notification.Builder(this, CHANNEL_FOREGROUND)
-                .setSmallIcon(R.drawable.app_icon)
+                .setSmallIcon(R.mipmap.ic_launcher)
                 .setContentTitle("Better DS Get")
                 .setContentText(bodyText)
                 .setOngoing(true)
                 .setOnlyAlertOnce(true)
-                .setContentIntent(pi)
+                .setContentIntent(createOpenAppPendingIntent(0))
                 .build();
     }
 
     private void fireAlertNotification(String title, String body) {
         NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
         if (nm == null) return;
+        int notifId = alertNotificationCounter++;
         Notification n = new Notification.Builder(this, CHANNEL_ALERTS)
-                .setSmallIcon(R.drawable.app_icon)
+                .setSmallIcon(R.mipmap.ic_launcher)
                 .setContentTitle(title)
                 .setContentText(body)
+                .setContentIntent(createOpenAppPendingIntent(notifId))
                 .setAutoCancel(true)
                 .build();
-        nm.notify(alertNotificationCounter++, n);
+        nm.notify(notifId, n);
     }
 
     public static void ensureChannels(Context context) {

@@ -117,6 +117,11 @@ public class SearchInputAndKeyboardUnitTest {
         // 4. Expandable status chevron always rendered
         assertTrue("Search status must render expandable chevron icon",
                 content.contains("showEngineDetails ? R.drawable.ic_chevron_up : R.drawable.ic_chevron_down"));
+        // 5. Centered empty / waiting state texts
+        assertTrue("Search idle/waiting/empty texts must center horizontally via Gravity.CENTER",
+                content.contains("findTv.setGravity(Gravity.CENTER)")
+                        && content.contains("waitTv.setGravity(Gravity.CENTER)")
+                        && content.contains("noResTv.setGravity(Gravity.CENTER)"));
     }
 
     @Test
@@ -137,5 +142,94 @@ public class SearchInputAndKeyboardUnitTest {
                 mainContent.contains("formatTaskProgressSpan("));
         assertTrue("Task tracker tab must use colored up/down vector icons",
                 mainContent.contains("makeTintedIcon(R.drawable.ic_arrow_up, 11, UiTheme.COLOR_GREEN)"));
+    }
+
+    @Test
+    public void testNotificationColoredAppIconInSmartDownloadService() throws Exception {
+        File mipmapXml = new File("src/main/res/mipmap-anydpi-v26/ic_launcher.xml");
+        assertTrue("Adaptive ic_launcher.xml must exist in res/mipmap-anydpi-v26", mipmapXml.exists());
+
+        File serviceFile = new File("src/main/java/com/antimirov/betterdsget/service/SmartDownloadService.java");
+        assertTrue("SmartDownloadService.java must exist", serviceFile.exists());
+        String serviceContent = new String(Files.readAllBytes(serviceFile.toPath()));
+        assertTrue("SmartDownloadService must use adaptive R.mipmap.ic_launcher matching Notifee default",
+                serviceContent.contains(".setSmallIcon(R.mipmap.ic_launcher)"));
+        assertTrue("SmartDownloadService must not use uncropped flat R.drawable.app_icon",
+                !serviceContent.contains("R.drawable.app_icon"));
+        assertTrue("SmartDownloadService must not use monochrome ic_stat_download",
+                !serviceContent.contains("ic_stat_download"));
+        assertTrue("SmartDownloadService must attach tap-to-open PendingIntent to alert notifications",
+                serviceContent.contains("createOpenAppPendingIntent(")
+                        && serviceContent.contains(".setContentIntent(createOpenAppPendingIntent(notifId))"));
+        assertTrue("SmartDownloadService must remove notification debug leftovers (timestamps, grace period, test method)",
+                !serviceContent.contains("SimpleDateFormat")
+                        && !serviceContent.contains("Grace period")
+                        && !serviceContent.contains("sendTestNotification"));
+
+        String dialogsContent = new String(Files.readAllBytes(
+                new File("src/main/java/com/antimirov/betterdsget/ui/AppDialogs.java").toPath()));
+        assertTrue("Settings dialog must remove Test Notification debug row",
+                !dialogsContent.contains("Test Notification"));
+    }
+
+    @Test
+    public void testBottomSheetDialogsSwitchStylingAndAddTaskErrorRecovery() throws Exception {
+        String uiThemeContent = new String(Files.readAllBytes(
+                new File("src/main/java/com/antimirov/betterdsget/ui/UiTheme.java").toPath()));
+        assertTrue("UiTheme must define topRoundedRect for bottom sheets",
+                uiThemeContent.contains("public static GradientDrawable topRoundedRect("));
+        assertTrue("UiTheme must define styleSwitch for custom cyan Switch tinting",
+                uiThemeContent.contains("public static void styleSwitch(Switch sw)"));
+        assertTrue("UiTheme must define makeInfoRow overload with maxLines",
+                uiThemeContent.contains("public static LinearLayout makeInfoRow(Context ctx, String label, String value, int maxLines)"));
+
+        String dialogsContent = new String(Files.readAllBytes(
+                new File("src/main/java/com/antimirov/betterdsget/ui/AppDialogs.java").toPath()));
+        assertTrue("AppDialogs must define createBottomSheetCard",
+                dialogsContent.contains("createBottomSheetCard("));
+        assertTrue("AppDialogs must define showAndFormatBottomSheet anchored at Gravity.BOTTOM",
+                dialogsContent.contains("showAndFormatBottomSheet(") && dialogsContent.contains("Gravity.BOTTOM"));
+        assertTrue("File selection sheet must style checkboxes as cyan Switches via UiTheme.styleSwitch",
+                dialogsContent.contains("UiTheme.styleSwitch(sw)"));
+        assertTrue("Add Task sheet must display (Default) suffix when using default destination",
+                dialogsContent.contains("+ \" (Default)\""));
+        assertTrue("AddTaskCallbacks must pass resetButtonState runnable for URL and torrent submission recovery",
+                dialogsContent.contains("void onSubmitUrlTask(String url, String destination, Dialog dialog, Runnable resetButtonState)")
+                        && dialogsContent.contains("void onSubmitTorrentFile(IncomingPayload filePayload, String destination, Dialog dialog, Runnable resetButtonState)"));
+    }
+
+    @Test
+    public void testMaterialCircularPullToRefreshAndTaskDetailEnhancements() throws Exception {
+        String mainContent = new String(Files.readAllBytes(
+                new File("src/main/java/com/antimirov/betterdsget/MainActivity.java").toPath()));
+
+        // Material floating circular pull-to-refresh + initial loading spinner
+        assertTrue("Tasks tab must configure floating tasksRefreshCircle",
+                mainContent.contains("FrameLayout tasksRefreshCircle"));
+        assertTrue("Tasks ScrollView must disable stretch overscroll (OVER_SCROLL_NEVER) during custom pull-to-refresh",
+                mainContent.contains("tasksScrollView.setOverScrollMode(View.OVER_SCROLL_NEVER)"));
+        assertTrue("Manual pull-to-refresh must enforce minimum spinner visibility via finishManualRefreshSpinner",
+                mainContent.contains("finishManualRefreshSpinner()") && mainContent.contains("650L - elapsed"));
+        assertTrue("Tasks tab must show initial loading indicator before first poll completes",
+                mainContent.contains("isInitialTasksLoading"));
+
+        // 2FA draft preservation
+        assertTrue("Login screen must preserve form drafts across 2FA rebuilds",
+                mainContent.contains("loginDraftUrl")
+                        && mainContent.contains("loginDraftAccount")
+                        && mainContent.contains("loginDraftPassword")
+                        && mainContent.contains("attachDraftWatcher("));
+
+        // Compact TaskCard footerRow (progress bar + DL/UL side-by-side)
+        assertTrue("Task cards must place barTrack and speedRow side-by-side inside footerRow",
+                mainContent.contains("footerRow.addView(barTrack)") && mainContent.contains("footerRow.addView(speedRow)"));
+
+        // Tracker protocol pill badges & virtualized File ListView
+        assertTrue("Tracker cards must render UDP (#673AB7) and HTTP (#757575) protocol pill badges",
+                mainContent.contains("\"#673AB7\"") && mainContent.contains("\"#757575\""));
+        assertTrue("TaskDetail File tab must render via virtualized ListView and BaseAdapter",
+                mainContent.contains("ListView listView = new ListView(this)") && mainContent.contains("new BaseAdapter()"));
+        assertTrue("TaskDetail File tab must no longer truncate after 200 items",
+                !mainContent.contains("Display capped at 200 items"));
     }
 }

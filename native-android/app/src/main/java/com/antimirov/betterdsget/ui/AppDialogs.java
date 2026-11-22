@@ -14,13 +14,13 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.view.Window;
 import android.widget.BaseAdapter;
-import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ListView;
 import android.widget.ProgressBar;
 import android.widget.ScrollView;
+import android.widget.Switch;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -30,7 +30,6 @@ import com.antimirov.betterdsget.api.Models.ConnectionInfo;
 import com.antimirov.betterdsget.api.Models.FolderEntry;
 import com.antimirov.betterdsget.api.Models.TaskFileItem;
 import com.antimirov.betterdsget.api.SessionManager;
-import com.antimirov.betterdsget.service.SmartDownloadService;
 import com.antimirov.betterdsget.util.AndroidPrefsStore;
 import com.antimirov.betterdsget.util.FormatUtils;
 
@@ -84,8 +83,8 @@ public final class AppDialogs {
 
     public interface AddTaskCallbacks {
         void onPickTorrentFileRequested(Runnable refreshDialogUi);
-        void onSubmitUrlTask(String url, String destination, Dialog dialog);
-        void onSubmitTorrentFile(IncomingPayload filePayload, String destination, Dialog dialog);
+        void onSubmitUrlTask(String url, String destination, Dialog dialog, Runnable resetButtonState);
+        void onSubmitTorrentFile(IncomingPayload filePayload, String destination, Dialog dialog, Runnable resetButtonState);
     }
 
     private AppDialogs() {}
@@ -194,18 +193,6 @@ public final class AppDialogs {
         folderRow.addView(fIcon);
         folderRow.addView(fCol);
         root.addView(folderRow);
-
-        root.addView(UiTheme.makeDivider(activity, 8));
-
-        // Test Notification
-        root.addView(makeSettingsActionRow(activity, "🔔", "Test Notification", UiTheme.COLOR_YELLOW, () -> {
-            boolean ok = SmartDownloadService.sendTestNotification(activity);
-            if (ok) {
-                Toast.makeText(activity, "Test notification fired!", Toast.LENGTH_SHORT).show();
-            } else {
-                Toast.makeText(activity, "Notification permission denied or disabled", Toast.LENGTH_LONG).show();
-            }
-        }));
 
         root.addView(UiTheme.makeDivider(activity, 8));
 
@@ -426,7 +413,7 @@ public final class AppDialogs {
             FolderSelectedCallback callback
     ) {
         Dialog dialog = createBaseDialog(activity);
-        LinearLayout root = createModalCard(activity);
+        LinearLayout root = createBottomSheetCard(activity, UiTheme.COLOR_BG_CARD);
 
         TextView titleTv = UiTheme.makeText(activity, modalTitle, 20, UiTheme.COLOR_TEXT_PRIMARY, true);
         titleTv.setGravity(Gravity.CENTER);
@@ -562,7 +549,7 @@ public final class AppDialogs {
 
         loadFolderRunner[0].run();
         dialog.setContentView(root);
-        showAndFormatDialog(dialog, activity);
+        showAndFormatBottomSheet(dialog, activity);
     }
 
     // ── File Selection Modal (Selective Torrent Download) ──────────
@@ -573,7 +560,7 @@ public final class AppDialogs {
             FileSelectionCallback callback
     ) {
         Dialog dialog = createBaseDialog(activity);
-        LinearLayout root = createModalCard(activity);
+        LinearLayout root = createBottomSheetCard(activity, UiTheme.COLOR_BG_CARD);
 
         final Set<Integer> selectedIndices = new HashSet<>();
         for (TaskFileItem f : files) {
@@ -626,7 +613,7 @@ public final class AppDialogs {
             class ViewHolder {
                 TextView nameTv;
                 TextView sizeTv;
-                CheckBox cb;
+                Switch sw;
             }
 
             @Override
@@ -648,17 +635,18 @@ public final class AppDialogs {
                     infoCol.addView(nameTv);
                     infoCol.addView(sizeTv);
 
-                    CheckBox cb = new CheckBox(activity);
-                    cb.setFocusable(false);
-                    cb.setClickable(false);
+                    Switch sw = new Switch(activity);
+                    UiTheme.styleSwitch(sw);
+                    sw.setFocusable(false);
+                    sw.setClickable(false);
 
                     row.addView(infoCol);
-                    row.addView(cb);
+                    row.addView(sw);
 
                     holder = new ViewHolder();
                     holder.nameTv = nameTv;
                     holder.sizeTv = sizeTv;
-                    holder.cb = cb;
+                    holder.sw = sw;
                     row.setTag(holder);
                     convertView = row;
                 } else {
@@ -668,15 +656,15 @@ public final class AppDialogs {
                 TaskFileItem item = getItem(position);
                 holder.nameTv.setText(item.name);
                 holder.sizeTv.setText(FormatUtils.formatBytes(item.size));
-                holder.cb.setChecked(selectedIndices.contains(item.index));
+                holder.sw.setChecked(selectedIndices.contains(item.index));
 
                 convertView.setOnClickListener(v -> {
                     if (selectedIndices.contains(item.index)) {
                         selectedIndices.remove(item.index);
-                        holder.cb.setChecked(false);
+                        holder.sw.setChecked(false);
                     } else {
                         selectedIndices.add(item.index);
-                        holder.cb.setChecked(true);
+                        holder.sw.setChecked(true);
                     }
                     toggleAllBtn.setText(selectedIndices.size() == files.size() ? "Deselect All" : "Select All");
                     title.setText("Select Files (" + selectedIndices.size() + "/" + files.size() + ")");
@@ -733,7 +721,7 @@ public final class AppDialogs {
         root.addView(footer);
 
         dialog.setContentView(root);
-        showAndFormatDialog(dialog, activity);
+        showAndFormatBottomSheet(dialog, activity);
     }
 
     public static Dialog showLoadingDialog(Activity activity, String message) {
@@ -774,11 +762,12 @@ public final class AppDialogs {
             AddTaskCallbacks callbacks
     ) {
         Dialog dialog = createBaseDialog(activity);
-        LinearLayout root = createModalCard(activity);
+        LinearLayout root = createBottomSheetCard(activity, UiTheme.COLOR_BG_MODAL);
 
         final String[] chosenFolder = new String[]{
                 (initialDestination != null && !initialDestination.isEmpty()) ? initialDestination : defaultDestination
         };
+        final boolean[] hasCustomFolderSelected = new boolean[]{false};
 
         final Runnable[] renderBody = new Runnable[1];
         renderBody[0] = () -> {
@@ -825,9 +814,15 @@ public final class AppDialogs {
 
             // Destination Folder selector
             root.addView(UiTheme.makeText(activity, "Download Destination", 13, UiTheme.COLOR_TEXT_MUTED, true));
-            String folderDisplay = (chosenFolder[0] != null && !chosenFolder[0].isEmpty())
-                    ? chosenFolder[0]
-                    : "Select Folder...";
+            String folderDisplay;
+            if (chosenFolder[0] != null && !chosenFolder[0].isEmpty()) {
+                boolean isDefault = !hasCustomFolderSelected[0]
+                        && defaultDestination != null
+                        && chosenFolder[0].equals(defaultDestination);
+                folderDisplay = isDefault ? chosenFolder[0] + " (Default)" : chosenFolder[0];
+            } else {
+                folderDisplay = "Select Folder...";
+            }
             TextView folderBtn = UiTheme.makeText(activity, "📁  " + folderDisplay + "   ›", 14, UiTheme.COLOR_TEXT_PRIMARY, false);
             int pad = UiTheme.dp(activity, 12);
             folderBtn.setPadding(pad, pad, pad, pad);
@@ -845,6 +840,7 @@ public final class AppDialogs {
                     defaultDestination,
                     selected -> {
                         chosenFolder[0] = selected;
+                        hasCustomFolderSelected[0] = true;
                         renderBody[0].run();
                     }
             ));
@@ -859,7 +855,12 @@ public final class AppDialogs {
                         uploadBtnHolder[0].setEnabled(false);
                         uploadBtnHolder[0].setText("Uploading Torrent...");
                     }
-                    callbacks.onSubmitTorrentFile(payload, chosenFolder[0], dialog);
+                    callbacks.onSubmitTorrentFile(payload, chosenFolder[0], dialog, () -> {
+                        if (uploadBtnHolder[0] != null) {
+                            uploadBtnHolder[0].setEnabled(true);
+                            uploadBtnHolder[0].setText("Upload Torrent");
+                        }
+                    });
                 });
                 uploadBtnHolder[0] = uploadBtn;
                 root.addView(uploadBtn);
@@ -867,11 +868,25 @@ public final class AppDialogs {
                 final TextView[] dlUrlBtnHolder = new TextView[1];
                 TextView dlUrlBtn = UiTheme.makeButton(activity, "Download from URL", UiTheme.COLOR_GREEN, UiTheme.COLOR_TEXT_PRIMARY, v -> {
                     UiTheme.hideKeyboard(activity, null);
+                    String trimmedUrl = urlInput.getText().toString().trim();
+                    if (trimmedUrl.isEmpty()) {
+                        new AlertDialog.Builder(activity, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+                                .setTitle("Error")
+                                .setMessage("Please enter a URL or magnet link")
+                                .setPositiveButton("OK", null)
+                                .show();
+                        return;
+                    }
                     if (dlUrlBtnHolder[0] != null) {
                         dlUrlBtnHolder[0].setEnabled(false);
                         dlUrlBtnHolder[0].setText("Adding Task...");
                     }
-                    callbacks.onSubmitUrlTask(urlInput.getText().toString().trim(), chosenFolder[0], dialog);
+                    callbacks.onSubmitUrlTask(trimmedUrl, chosenFolder[0], dialog, () -> {
+                        if (dlUrlBtnHolder[0] != null) {
+                            dlUrlBtnHolder[0].setEnabled(true);
+                            dlUrlBtnHolder[0].setText("Download from URL");
+                        }
+                    });
                 });
                 dlUrlBtnHolder[0] = dlUrlBtn;
                 root.addView(dlUrlBtn);
@@ -899,7 +914,7 @@ public final class AppDialogs {
 
         renderBody[0].run();
         dialog.setContentView(root);
-        showAndFormatDialog(dialog, activity);
+        showAndFormatBottomSheet(dialog, activity);
     }
 
     public static void showConfirmDialog(Activity activity, String title, String message, String confirmLabel, Runnable onConfirm) {
@@ -930,6 +945,15 @@ public final class AppDialogs {
         }
     }
 
+    public static void showAndFormatBottomSheet(Dialog dialog, Activity activity) {
+        dialog.show();
+        if (dialog.getWindow() != null) {
+            dialog.getWindow().setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            dialog.getWindow().setGravity(Gravity.BOTTOM);
+            dialog.getWindow().setWindowAnimations(android.R.style.Animation_InputMethod);
+        }
+    }
+
     private static Dialog createBaseDialog(Activity activity) {
         Dialog dialog = new Dialog(activity);
         dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
@@ -938,6 +962,19 @@ public final class AppDialogs {
         }
         dialog.setCanceledOnTouchOutside(true);
         return dialog;
+    }
+
+    private static LinearLayout createBottomSheetCard(Activity activity, int bgColor) {
+        LinearLayout card = new LinearLayout(activity);
+        card.setOrientation(LinearLayout.VERTICAL);
+        int pad = UiTheme.dp(activity, 24);
+        card.setPadding(pad, pad, pad, UiTheme.dp(activity, 28));
+        card.setBackground(UiTheme.topRoundedRect(bgColor, UiTheme.dp(activity, 20)));
+        card.setLayoutParams(new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+        ));
+        return card;
     }
 
     private static LinearLayout createModalCard(Activity activity) {

@@ -8,14 +8,20 @@ import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 
+import java.io.File;
+import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.util.LinkedHashMap;
+
+import javax.net.ssl.HttpsURLConnection;
 
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
 import okhttp3.mockwebserver.RecordedRequest;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
@@ -162,6 +168,28 @@ public class SynologyClientIntegrationTest {
         } catch (SynologyError e) {
             assertTrue(e.getMessage().contains("400 Bad Request"));
         }
+    }
+
+    @Test
+    public void testConfigureTrustAllHttpsAndQuickConnectResolverSslWiring() throws Exception {
+        HttpsURLConnection httpsConn = (HttpsURLConnection) new URL("https://localhost:5001/webapi/query.cgi").openConnection();
+        SynologyClient.configureTrustAllHttps(httpsConn);
+
+        assertNotNull("Custom trust-all SSLSocketFactory must be installed", httpsConn.getSSLSocketFactory());
+        assertTrue("HostnameVerifier must accept QuickConnect LAN/DDNS certificates",
+                httpsConn.getHostnameVerifier().verify("192-168-1-50.myqcid.direct.quickconnect.to", null));
+
+        String qcResolverContent = new String(Files.readAllBytes(
+                new File("src/main/java/com/antimirov/betterdsget/api/QuickConnectResolver.java").toPath()));
+        assertTrue("QuickConnectResolver must configure trust-all HTTPS on HttpsURLConnection probes",
+                qcResolverContent.contains("SynologyClient.configureTrustAllHttps((HttpsURLConnection) conn)"));
+
+        String sessionMgrContent = new String(Files.readAllBytes(
+                new File("src/main/java/com/antimirov/betterdsget/api/SessionManager.java").toPath()));
+        assertTrue("SessionManager must re-resolve QuickConnect on restore NetworkError",
+                sessionMgrContent.contains("FormatUtils.isQuickConnectId(saved.originalAddress)"));
+        assertTrue("SessionManager must re-resolve QuickConnect on reconnect NetworkError",
+                sessionMgrContent.contains("FormatUtils.isQuickConnectId(credentials.originalAddress)"));
     }
 }
 

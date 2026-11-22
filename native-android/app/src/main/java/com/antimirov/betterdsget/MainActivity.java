@@ -2,19 +2,21 @@ package com.antimirov.betterdsget;
 
 import android.Manifest;
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.app.Dialog;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.content.res.ColorStateList;
 import android.graphics.Color;
 import android.graphics.Typeface;
-import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.ColorDrawable;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.text.Editable;
+import android.text.InputFilter;
 import android.text.InputType;
 import android.text.SpannableStringBuilder;
 import android.text.Spanned;
@@ -25,14 +27,18 @@ import android.text.style.StyleSpan;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.KeyEvent;
+import android.view.MotionEvent;
 import android.view.View;
+import android.view.ViewConfiguration;
 import android.view.ViewGroup;
 import android.view.WindowInsets;
 import android.view.inputmethod.EditorInfo;
+import android.widget.BaseAdapter;
 import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
+import android.widget.ListView;
 import android.widget.ProgressBar;
 import android.widget.ScrollView;
 import android.widget.Switch;
@@ -99,12 +105,22 @@ public class MainActivity extends Activity {
     private Screen currentScreen = Screen.LOGIN;
     private boolean isRestoringSession = true;
     private boolean needsOtp = false;
+    private String loginDraftUrl = null;
+    private String loginDraftAccount = null;
+    private String loginDraftPassword = null;
+    private String loginDraftOtp = "";
 
     // Tasks state
     private List<TaskItem> tasks = new ArrayList<>();
     private TransferStats transferStats = new TransferStats(0, 0);
     private String defaultDestination = "";
     private String searchDestination = "";
+    private boolean isInitialTasksLoading = true;
+    private boolean isManualRefreshing = false;
+    private long manualRefreshStartMs = 0L;
+    private float pullDownStartY = -1f;
+    private float activePullSlop = 0f;
+    private boolean isPullingDown = false;
 
     // Task detail state
     private TaskItem activeDetailTask = null;
@@ -136,9 +152,14 @@ public class MainActivity extends Activity {
     // Live-updatable containers
     private TextView tasksHeaderTitle;
     private LinearLayout tasksHeaderStats;
+    private FrameLayout tasksRefreshCircle;
+    private ProgressBar tasksRefreshSpinner;
+    private ScrollView tasksScrollView;
     private LinearLayout tasksListContainer;
     private LinearLayout detailActionBar;
-    private LinearLayout detailContentContainer;
+    private final TextView[] detailTabLabels = new TextView[4];
+    private final View[] detailTabIndicators = new View[4];
+    private FrameLayout detailContentFrame;
     private LinearLayout searchResultsContainer;
     private LinearLayout searchStatusBanner;
     private LinearLayout searchSortBar;
@@ -243,6 +264,15 @@ public class MainActivity extends Activity {
             queuedIntentPayload = payload;
             if (sessionManager.isConnected()) {
                 deliverQueuedIntent();
+            }
+            return;
+        }
+        if (intent != null && intent.getBooleanExtra(SmartDownloadService.EXTRA_OPEN_TASKS, false)
+                && sessionManager != null && sessionManager.isConnected()) {
+            if (currentScreen != Screen.TASKS) {
+                navigateTo(Screen.TASKS);
+            } else {
+                refreshTasksAsync();
             }
         }
     }
@@ -436,6 +466,7 @@ public class MainActivity extends Activity {
     }
 
     private void onConnectedSuccess() {
+        isInitialTasksLoading = true;
         searchController = new SearchController(sessionManager.getDs());
         SmartDownloadService.startOrKick(this);
 
@@ -511,6 +542,25 @@ public class MainActivity extends Activity {
 
     // ── 1. Login View ──────────────────────────────────────────────
 
+    private void attachDraftWatcher(EditText input, java.util.function.Consumer<String> onChanged) {
+        input.addTextChangedListener(new TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+            @Override public void onTextChanged(CharSequence s, int start, int before, int count) {
+                onChanged.accept(s != null ? s.toString() : "");
+            }
+            @Override public void afterTextChanged(Editable s) {}
+        });
+    }
+
+    private void showErrorAlert(String title, String message) {
+        if (isFinishing() || isDestroyed()) return;
+        new AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+                .setTitle(title)
+                .setMessage(message)
+                .setPositiveButton("OK", null)
+                .show();
+    }
+
     private View buildLoginView() {
         LinearLayout outer = new LinearLayout(this);
         outer.setOrientation(LinearLayout.VERTICAL);
@@ -532,6 +582,7 @@ public class MainActivity extends Activity {
         if (isRestoringSession) {
             card.setGravity(Gravity.CENTER);
             ProgressBar pb = new ProgressBar(this);
+            pb.setIndeterminateTintList(ColorStateList.valueOf(UiTheme.COLOR_SYNOLOGY_BLUE));
             card.addView(pb);
             TextView title = UiTheme.makeText(this, "Better DS Get", 22, UiTheme.COLOR_SYNOLOGY_BLUE, true);
             title.setPadding(0, UiTheme.dp(this, 12), 0, UiTheme.dp(this, 6));
@@ -547,12 +598,22 @@ public class MainActivity extends Activity {
         card.addView(title);
 
         StoredCredentials saved = prefsStore.loadCredentials();
+        if (loginDraftUrl == null && saved != null && saved.originalAddress != null) {
+            loginDraftUrl = saved.originalAddress;
+        }
+        if (loginDraftAccount == null && saved != null && saved.account != null) {
+            loginDraftAccount = saved.account;
+        }
+        if (loginDraftPassword == null && saved != null && saved.password != null) {
+            loginDraftPassword = saved.password;
+        }
 
         card.addView(UiTheme.makeText(this, "Synology URL (IP/QuickConnect)", 13, UiTheme.COLOR_TEXT_MUTED, true));
         EditText urlInput = UiTheme.makeInput(this, "e.g. 192.168.1.100:5000", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
-        if (saved != null && saved.originalAddress != null) {
-            urlInput.setText(saved.originalAddress);
+        if (loginDraftUrl != null) {
+            urlInput.setText(loginDraftUrl);
         }
+        attachDraftWatcher(urlInput, s -> loginDraftUrl = s);
         LinearLayout.LayoutParams inputLp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         inputLp.topMargin = UiTheme.dp(this, 6);
         inputLp.bottomMargin = UiTheme.dp(this, 14);
@@ -561,83 +622,140 @@ public class MainActivity extends Activity {
 
         card.addView(UiTheme.makeText(this, "Account", 13, UiTheme.COLOR_TEXT_MUTED, true));
         EditText accountInput = UiTheme.makeInput(this, "admin", InputType.TYPE_CLASS_TEXT);
-        if (saved != null && saved.account != null) {
-            accountInput.setText(saved.account);
+        if (loginDraftAccount != null) {
+            accountInput.setText(loginDraftAccount);
         }
+        attachDraftWatcher(accountInput, s -> loginDraftAccount = s);
         accountInput.setLayoutParams(inputLp);
         card.addView(accountInput);
 
         card.addView(UiTheme.makeText(this, "Password", 13, UiTheme.COLOR_TEXT_MUTED, true));
         EditText passwordInput = UiTheme.makeInput(this, "password", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
-        if (saved != null && saved.password != null) {
-            passwordInput.setText(saved.password);
+        if (loginDraftPassword != null) {
+            passwordInput.setText(loginDraftPassword);
         }
+        attachDraftWatcher(passwordInput, s -> loginDraftPassword = s);
         passwordInput.setLayoutParams(inputLp);
         card.addView(passwordInput);
 
         final EditText otpInput = UiTheme.makeInput(this, "123456", InputType.TYPE_CLASS_NUMBER);
         if (needsOtp) {
-            card.addView(UiTheme.makeText(this, "🔐 Authenticator Code", 13, UiTheme.COLOR_YELLOW, true));
+            card.addView(UiTheme.makeText(this, "🔐 Authenticator Code", 13, Color.parseColor("#FFB300"), true));
+            otpInput.setBackground(UiTheme.roundedRectWithBorder(
+                    UiTheme.COLOR_BG_CARD,
+                    Color.parseColor("#FFB300"),
+                    UiTheme.dp(this, 1),
+                    UiTheme.dp(this, 8)
+            ));
+            otpInput.setGravity(Gravity.CENTER);
+            otpInput.setTextSize(TypedValue.COMPLEX_UNIT_SP, 20);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                otpInput.setLetterSpacing(0.25f);
+            }
+            otpInput.setFilters(new InputFilter[]{new InputFilter.LengthFilter(8)});
+            otpInput.setText(loginDraftOtp);
+            attachDraftWatcher(otpInput, s -> loginDraftOtp = s);
             otpInput.setLayoutParams(inputLp);
             card.addView(otpInput);
+            otpInput.requestFocus();
         }
 
-        final TextView connectBtn = UiTheme.makeButton(
+        // Connect button with inline ProgressBar spinner
+        LinearLayout connectBtnContainer = new LinearLayout(this);
+        connectBtnContainer.setOrientation(LinearLayout.HORIZONTAL);
+        connectBtnContainer.setGravity(Gravity.CENTER);
+        connectBtnContainer.setPadding(UiTheme.dp(this, 16), UiTheme.dp(this, 14), UiTheme.dp(this, 16), UiTheme.dp(this, 14));
+        connectBtnContainer.setBackground(UiTheme.roundedRect(UiTheme.COLOR_SYNOLOGY_BLUE, UiTheme.dp(this, 8)));
+        connectBtnContainer.setClickable(true);
+        connectBtnContainer.setFocusable(true);
+        LinearLayout.LayoutParams btnLp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        btnLp.topMargin = UiTheme.dp(this, 6);
+        connectBtnContainer.setLayoutParams(btnLp);
+
+        ProgressBar connectSpinner = new ProgressBar(this);
+        int spSize = UiTheme.dp(this, 18);
+        LinearLayout.LayoutParams spLp = new LinearLayout.LayoutParams(spSize, spSize);
+        spLp.rightMargin = UiTheme.dp(this, 10);
+        connectSpinner.setLayoutParams(spLp);
+        connectSpinner.setIndeterminateTintList(ColorStateList.valueOf(UiTheme.COLOR_TEXT_PRIMARY));
+        connectSpinner.setVisibility(View.GONE);
+
+        TextView connectBtnText = UiTheme.makeText(
                 this,
                 needsOtp ? "Verify & Connect" : "Connect to NAS",
-                UiTheme.COLOR_SYNOLOGY_BLUE,
+                17,
                 UiTheme.COLOR_TEXT_PRIMARY,
-                null
+                true
         );
-        connectBtn.setOnClickListener(v -> {
+
+        connectBtnContainer.addView(connectSpinner);
+        connectBtnContainer.addView(connectBtnText);
+
+        connectBtnContainer.setOnClickListener(v -> {
             UiTheme.hideKeyboard(this, null);
             String rawUrl = urlInput.getText().toString().trim();
             String acc = accountInput.getText().toString().trim();
             String pass = passwordInput.getText().toString();
             String otpVal = needsOtp ? otpInput.getText().toString().trim() : null;
 
+            loginDraftUrl = rawUrl;
+            loginDraftAccount = acc;
+            loginDraftPassword = pass;
+
             if (rawUrl.isEmpty() || acc.isEmpty() || pass.isEmpty()) {
-                Toast.makeText(this, "Please fill in all required fields", Toast.LENGTH_SHORT).show();
+                showErrorAlert("Missing Info", "Please fill in all required fields.");
                 return;
             }
 
-            connectBtn.setEnabled(false);
-            connectBtn.setText("Connecting...");
+            connectBtnContainer.setEnabled(false);
+            connectBtnContainer.setBackground(UiTheme.roundedRect(Color.parseColor("#005F87"), UiTheme.dp(this, 8)));
+            connectSpinner.setVisibility(View.VISIBLE);
+            connectBtnText.setText("Connecting...");
 
             bgExecutor.execute(() -> {
                 try {
                     String finalUrl;
                     if (FormatUtils.isQuickConnectId(rawUrl)) {
-                        uiHandler.post(() -> connectBtn.setText("Resolving QuickConnect..."));
+                        uiHandler.post(() -> connectBtnText.setText("Resolving QuickConnect..."));
                         finalUrl = QuickConnectResolver.resolveQuickConnect(rawUrl);
                     } else {
                         finalUrl = FormatUtils.normalizeDirectUrl(rawUrl);
                     }
 
-                    uiHandler.post(() -> connectBtn.setText("Authorizing..."));
+                    uiHandler.post(() -> connectBtnText.setText("Authorizing..."));
                     sessionManager.connect(finalUrl, acc, pass, otpVal, true, rawUrl);
 
                     uiHandler.post(() -> {
                         needsOtp = false;
+                        loginDraftOtp = "";
                         onConnectedSuccess();
                     });
                 } catch (Exception e) {
                     uiHandler.post(() -> {
-                        connectBtn.setEnabled(true);
+                        connectBtnContainer.setEnabled(true);
+                        connectBtnContainer.setBackground(UiTheme.roundedRect(UiTheme.COLOR_SYNOLOGY_BLUE, UiTheme.dp(this, 8)));
+                        connectSpinner.setVisibility(View.GONE);
                         if (e instanceof SynologyError && ((SynologyError) e).isOtpRequired()) {
+                            boolean wasAlreadyNeedsOtp = needsOtp;
                             needsOtp = true;
-                            Toast.makeText(this, "2FA Required: Enter authenticator code", Toast.LENGTH_LONG).show();
+                            loginDraftOtp = "";
                             renderScreen(Screen.LOGIN);
+                            showErrorAlert(
+                                    "2FA Required",
+                                    wasAlreadyNeedsOtp
+                                            ? "The code you entered was incorrect. Please try again."
+                                            : "This account requires two-factor authentication. Please enter the code from your authenticator app."
+                            );
                         } else {
-                            connectBtn.setText(needsOtp ? "Verify & Connect" : "Connect to NAS");
-                            Toast.makeText(this, "Login Failed: " + e.getMessage(), Toast.LENGTH_LONG).show();
+                            connectBtnText.setText(needsOtp ? "Verify & Connect" : "Connect to NAS");
+                            showErrorAlert("Login Failed", e.getMessage() != null ? e.getMessage() : "Unknown error occurred");
                         }
                     });
                 }
             });
         });
 
-        card.addView(connectBtn);
+        card.addView(connectBtnContainer);
         outer.addView(card);
         return outer;
     }
@@ -694,19 +812,147 @@ public class MainActivity extends Activity {
         header.addView(settingsBtn);
         page.addView(header);
 
-        // Scrollable task list
-        ScrollView scroll = new ScrollView(this);
-        scroll.setLayoutParams(new LinearLayout.LayoutParams(
+        // Overlaid list container with floating Material-style refresh disc (no layout reflow)
+        FrameLayout listAreaFrame = new FrameLayout(this);
+        listAreaFrame.setClipChildren(true);
+        listAreaFrame.setLayoutParams(new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 0,
                 1f
         ));
+
+        tasksScrollView = new ScrollView(this);
+        tasksScrollView.setOverScrollMode(View.OVER_SCROLL_NEVER);
+        tasksScrollView.setLayoutParams(new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+        ));
+
         tasksListContainer = new LinearLayout(this);
         tasksListContainer.setOrientation(LinearLayout.VERTICAL);
         int listPad = UiTheme.dp(this, 16);
         tasksListContainer.setPadding(listPad, listPad, listPad, UiTheme.dp(this, 90));
-        scroll.addView(tasksListContainer);
-        page.addView(scroll);
+        tasksScrollView.addView(tasksListContainer);
+        listAreaFrame.addView(tasksScrollView);
+
+        // Floating circular refresh indicator (matches Android SwipeRefreshLayout look & feel)
+        int circleSize = UiTheme.dp(this, 40);
+        tasksRefreshCircle = new FrameLayout(this);
+        FrameLayout.LayoutParams circleLp = new FrameLayout.LayoutParams(circleSize, circleSize);
+        circleLp.gravity = Gravity.TOP | Gravity.CENTER_HORIZONTAL;
+        tasksRefreshCircle.setLayoutParams(circleLp);
+        tasksRefreshCircle.setBackground(UiTheme.roundedRectWithBorder(
+                Color.parseColor("#2C2C2C"),
+                Color.parseColor("#3D3D3D"),
+                UiTheme.dp(this, 1),
+                circleSize / 2
+        ));
+        tasksRefreshCircle.setElevation(UiTheme.dp(this, 6));
+        tasksRefreshCircle.setTranslationY(-UiTheme.dp(this, 48));
+        tasksRefreshCircle.setAlpha(0f);
+        tasksRefreshCircle.setScaleX(0.5f);
+        tasksRefreshCircle.setScaleY(0.5f);
+        tasksRefreshCircle.setVisibility(View.GONE);
+
+        tasksRefreshSpinner = new ProgressBar(this);
+        int spSize = UiTheme.dp(this, 22);
+        FrameLayout.LayoutParams spLp = new FrameLayout.LayoutParams(spSize, spSize);
+        spLp.gravity = Gravity.CENTER;
+        tasksRefreshSpinner.setLayoutParams(spLp);
+        tasksRefreshSpinner.setIndeterminateTintList(ColorStateList.valueOf(UiTheme.COLOR_SYNOLOGY_BLUE));
+        tasksRefreshCircle.addView(tasksRefreshSpinner);
+        listAreaFrame.addView(tasksRefreshCircle);
+
+        final int touchSlop = ViewConfiguration.get(this).getScaledTouchSlop();
+        final float triggerDistancePx = UiTheme.dp(this, 64);
+        final float maxPullPx = UiTheme.dp(this, 88);
+        final float hiddenY = -UiTheme.dp(this, 48);
+        final float restingY = UiTheme.dp(this, 16);
+
+        tasksScrollView.setOnTouchListener((v, ev) -> {
+            if (isManualRefreshing) return false;
+            switch (ev.getActionMasked()) {
+                case MotionEvent.ACTION_DOWN:
+                    pullDownStartY = tasksScrollView.getScrollY() == 0 ? ev.getRawY() : -1f;
+                    activePullSlop = touchSlop;
+                    isPullingDown = false;
+                    break;
+                case MotionEvent.ACTION_MOVE:
+                    if (tasksScrollView.getScrollY() == 0) {
+                        if (pullDownStartY < 0f) {
+                            pullDownStartY = ev.getRawY();
+                            // Drag was just handed off from a child view after touchSlop elapsed
+                            activePullSlop = 0f;
+                        }
+                        float rawDy = ev.getRawY() - pullDownStartY;
+                        float pull = rawDy - activePullSlop;
+                        if (pull > 0f) {
+                            isPullingDown = true;
+                            tasksRefreshCircle.animate().cancel();
+                            tasksListContainer.animate().cancel();
+                            if (tasksRefreshCircle.getVisibility() != View.VISIBLE) {
+                                tasksRefreshCircle.setVisibility(View.VISIBLE);
+                            }
+                            float damped = (float) (maxPullPx * (1.0 - Math.exp(-pull / (maxPullPx * 1.15f))));
+                            float progress = Math.min(1f, pull / triggerDistancePx);
+                            float scale = 0.55f + 0.45f * progress;
+                            tasksRefreshCircle.setTranslationY(-UiTheme.dp(this, 44) + damped);
+                            tasksRefreshCircle.setAlpha(0.35f + 0.65f * progress);
+                            tasksRefreshCircle.setScaleX(scale);
+                            tasksRefreshCircle.setScaleY(scale);
+                            tasksListContainer.setTranslationY(damped * 0.4f);
+                            return true;
+                        } else if (isPullingDown) {
+                            isPullingDown = false;
+                            tasksRefreshCircle.setVisibility(View.GONE);
+                            tasksRefreshCircle.setTranslationY(hiddenY);
+                            tasksListContainer.setTranslationY(0f);
+                        }
+                    } else {
+                        pullDownStartY = -1f;
+                    }
+                    break;
+                case MotionEvent.ACTION_UP:
+                case MotionEvent.ACTION_CANCEL:
+                    if (isPullingDown) {
+                        float pull = pullDownStartY >= 0f ? (ev.getRawY() - pullDownStartY - activePullSlop) : 0f;
+                        isPullingDown = false;
+                        pullDownStartY = -1f;
+                        tasksListContainer.animate().translationY(0f).setDuration(200).start();
+                        if (ev.getActionMasked() == MotionEvent.ACTION_UP && pull >= triggerDistancePx) {
+                            isManualRefreshing = true;
+                            manualRefreshStartMs = System.currentTimeMillis();
+                            tasksRefreshCircle.animate()
+                                    .translationY(restingY)
+                                    .scaleX(1f)
+                                    .scaleY(1f)
+                                    .alpha(1f)
+                                    .setDuration(180)
+                                    .start();
+                            refreshTasksAsync(true);
+                        } else {
+                            tasksRefreshCircle.animate()
+                                    .translationY(hiddenY)
+                                    .scaleX(0.5f)
+                                    .scaleY(0.5f)
+                                    .alpha(0f)
+                                    .setDuration(180)
+                                    .withEndAction(() -> {
+                                        if (!isManualRefreshing && !isPullingDown && tasksRefreshCircle != null) {
+                                            tasksRefreshCircle.setVisibility(View.GONE);
+                                        }
+                                    })
+                                    .start();
+                        }
+                        return true;
+                    }
+                    pullDownStartY = -1f;
+                    break;
+            }
+            return false;
+        });
+
+        page.addView(listAreaFrame);
 
         renderTaskCards();
         frame.addView(page);
@@ -789,10 +1035,21 @@ public class MainActivity extends Activity {
         tasksListContainer.removeAllViews();
 
         if (tasks.isEmpty()) {
-            TextView empty = UiTheme.makeText(this, "No download tasks active.", 15, UiTheme.COLOR_TEXT_MUTED, false);
-            empty.setGravity(Gravity.CENTER);
-            empty.setPadding(0, UiTheme.dp(this, 48), 0, 0);
-            tasksListContainer.addView(empty);
+            if (isInitialTasksLoading) {
+                LinearLayout loadingBox = new LinearLayout(this);
+                loadingBox.setOrientation(LinearLayout.VERTICAL);
+                loadingBox.setGravity(Gravity.CENTER_HORIZONTAL);
+                loadingBox.setPadding(0, UiTheme.dp(this, 48), 0, 0);
+                ProgressBar pb = new ProgressBar(this);
+                pb.setIndeterminateTintList(ColorStateList.valueOf(UiTheme.COLOR_SYNOLOGY_BLUE));
+                loadingBox.addView(pb);
+                tasksListContainer.addView(loadingBox);
+            } else {
+                TextView empty = UiTheme.makeText(this, "No download tasks active.", 15, UiTheme.COLOR_TEXT_MUTED, false);
+                empty.setGravity(Gravity.CENTER);
+                empty.setPadding(0, UiTheme.dp(this, 48), 0, 0);
+                tasksListContainer.addView(empty);
+            }
             return;
         }
 
@@ -841,11 +1098,15 @@ public class MainActivity extends Activity {
             statusRow.addView(progTv);
             body.addView(statusRow);
 
-            // Progress bar
+            // Progress bar & speed row side-by-side (matching RN taskFooter)
+            LinearLayout footerRow = new LinearLayout(this);
+            footerRow.setOrientation(LinearLayout.HORIZONTAL);
+            footerRow.setGravity(Gravity.CENTER_VERTICAL);
+
             LinearLayout barTrack = new LinearLayout(this);
             barTrack.setOrientation(LinearLayout.HORIZONTAL);
             barTrack.setBackground(UiTheme.roundedRect(Color.parseColor("#333333"), UiTheme.dp(this, 3)));
-            barTrack.setLayoutParams(new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, UiTheme.dp(this, 6)));
+            barTrack.setLayoutParams(new LinearLayout.LayoutParams(0, UiTheme.dp(this, 6), 1f));
 
             View fill = new View(this);
             fill.setBackground(UiTheme.roundedRect(accentColor, UiTheme.dp(this, 3)));
@@ -854,16 +1115,24 @@ public class MainActivity extends Activity {
             rest.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, (float) (100.0 - pct)));
             barTrack.addView(fill);
             barTrack.addView(rest);
-            body.addView(barTrack);
+            footerRow.addView(barTrack);
 
-            if ("downloading".equalsIgnoreCase(item.status) || "seeding".equalsIgnoreCase(item.status)) {
+            boolean showSpeed = "downloading".equalsIgnoreCase(item.status)
+                    || ("seeding".equalsIgnoreCase(item.status) && (item.speedDownload > 0 || item.speedUpload > 0));
+            if (showSpeed) {
                 LinearLayout speedRow = new LinearLayout(this);
                 speedRow.setOrientation(LinearLayout.HORIZONTAL);
                 speedRow.setGravity(Gravity.CENTER_VERTICAL);
-                speedRow.setPadding(0, UiTheme.dp(this, 6), 0, 0);
-                populateSpeedContainer(speedRow, item.speedDownload, item.speedUpload, 12);
-                body.addView(speedRow);
+                LinearLayout.LayoutParams speedLp = new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT
+                );
+                speedLp.leftMargin = UiTheme.dp(this, 10);
+                speedRow.setLayoutParams(speedLp);
+                populateSpeedContainer(speedRow, item.speedDownload, item.speedUpload, 8);
+                footerRow.addView(speedRow);
             }
+            body.addView(footerRow);
 
             outerCard.addView(body);
             outerCard.setOnClickListener(v -> {
@@ -879,6 +1148,32 @@ public class MainActivity extends Activity {
     }
 
     private void refreshTasksAsync() {
+        refreshTasksAsync(false);
+    }
+
+    private void finishManualRefreshSpinner() {
+        long elapsed = System.currentTimeMillis() - manualRefreshStartMs;
+        long waitMs = Math.max(0L, 650L - elapsed);
+        uiHandler.postDelayed(() -> {
+            isManualRefreshing = false;
+            if (tasksRefreshCircle != null) {
+                tasksRefreshCircle.animate()
+                        .scaleX(0.4f)
+                        .scaleY(0.4f)
+                        .alpha(0f)
+                        .translationY(-UiTheme.dp(this, 48))
+                        .setDuration(220)
+                        .withEndAction(() -> {
+                            if (!isManualRefreshing && !isPullingDown && tasksRefreshCircle != null) {
+                                tasksRefreshCircle.setVisibility(View.GONE);
+                            }
+                        })
+                        .start();
+            }
+        }, waitMs);
+    }
+
+    private void refreshTasksAsync(boolean isManual) {
         bgExecutor.execute(() -> {
             try {
                 TaskListResult res = sessionManager.execute(() ->
@@ -891,14 +1186,28 @@ public class MainActivity extends Activity {
                 final List<TaskItem> newTasks = res.tasks;
                 final TransferStats newStats = st;
                 uiHandler.post(() -> {
+                    isInitialTasksLoading = false;
                     tasks = newTasks;
                     transferStats = newStats;
+                    if (isManual) {
+                        finishManualRefreshSpinner();
+                    }
                     if (currentScreen == Screen.TASKS) {
                         updateHeaderStatsLabel();
                         renderTaskCards();
                     }
                 });
-            } catch (Exception ignored) {}
+            } catch (Exception ignored) {
+                uiHandler.post(() -> {
+                    isInitialTasksLoading = false;
+                    if (isManual) {
+                        finishManualRefreshSpinner();
+                    }
+                    if (currentScreen == Screen.TASKS && tasks.isEmpty()) {
+                        renderTaskCards();
+                    }
+                });
+            }
         });
     }
 
@@ -947,7 +1256,8 @@ public class MainActivity extends Activity {
         tabRow.setOrientation(LinearLayout.HORIZONTAL);
         tabRow.setBackgroundColor(UiTheme.COLOR_BG_CARD);
         final String[] tabs = {"Info", "Tracker", "Peers", "File"};
-        for (String tName : tabs) {
+        for (int i = 0; i < tabs.length; i++) {
+            final String tName = tabs[i];
             boolean active = tName.equals(activeDetailTab);
             LinearLayout tabItem = new LinearLayout(this);
             tabItem.setOrientation(LinearLayout.VERTICAL);
@@ -967,32 +1277,43 @@ public class MainActivity extends Activity {
             );
             tabTv.setGravity(Gravity.CENTER);
             tabTv.setPadding(0, UiTheme.dp(this, 12), 0, UiTheme.dp(this, 10));
+            detailTabLabels[i] = tabTv;
             tabItem.addView(tabTv);
 
             View indicator = new View(this);
             indicator.setLayoutParams(new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, UiTheme.dp(this, 2)));
             indicator.setBackgroundColor(active ? UiTheme.COLOR_SYNOLOGY_BLUE : Color.TRANSPARENT);
+            detailTabIndicators[i] = indicator;
             tabItem.addView(indicator);
 
             tabItem.setOnClickListener(v -> {
                 activeDetailTab = tName;
-                renderScreen(Screen.TASK_DETAIL);
+                updateDetailTabHighlight();
+                renderTaskDetailTabContent();
             });
             tabRow.addView(tabItem);
         }
         page.addView(tabRow);
 
-        ScrollView scroll = new ScrollView(this);
-        scroll.setLayoutParams(new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
-        detailContentContainer = new LinearLayout(this);
-        detailContentContainer.setOrientation(LinearLayout.VERTICAL);
-        int cPad = UiTheme.dp(this, 16);
-        detailContentContainer.setPadding(cPad, cPad, cPad, cPad);
-        scroll.addView(detailContentContainer);
-        page.addView(scroll);
+        detailContentFrame = new FrameLayout(this);
+        detailContentFrame.setLayoutParams(new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+        page.addView(detailContentFrame);
 
         renderTaskDetailTabContent();
         return page;
+    }
+
+    private void updateDetailTabHighlight() {
+        final String[] tabs = {"Info", "Tracker", "Peers", "File"};
+        for (int i = 0; i < tabs.length; i++) {
+            boolean active = tabs[i].equals(activeDetailTab);
+            if (detailTabLabels[i] != null) {
+                detailTabLabels[i].setTextColor(active ? UiTheme.COLOR_SYNOLOGY_BLUE : UiTheme.COLOR_TEXT_MUTED);
+            }
+            if (detailTabIndicators[i] != null) {
+                detailTabIndicators[i].setBackgroundColor(active ? UiTheme.COLOR_SYNOLOGY_BLUE : Color.TRANSPARENT);
+            }
+        }
     }
 
     private void renderTaskDetailActionBar() {
@@ -1056,14 +1377,169 @@ public class MainActivity extends Activity {
     }
 
     private void renderTaskDetailTabContent() {
-        if (detailContentContainer == null || activeDetailTask == null) return;
-        detailContentContainer.removeAllViews();
+        if (detailContentFrame == null || activeDetailTask == null) return;
+        detailContentFrame.removeAllViews();
 
-        TaskItem info = activeDetailTask;
+        final TaskItem info = activeDetailTask;
+        int outerPad = UiTheme.dp(this, 16);
+
+        if ("File".equals(activeDetailTab)) {
+            if (activeDetailFileError != null) {
+                LinearLayout box = new LinearLayout(this);
+                box.setOrientation(LinearLayout.VERTICAL);
+                box.setPadding(outerPad, outerPad, outerPad, outerPad);
+                LinearLayout card = new LinearLayout(this);
+                card.setOrientation(LinearLayout.VERTICAL);
+                card.setPadding(outerPad, outerPad, outerPad, outerPad);
+                card.setBackground(UiTheme.roundedRect(Color.parseColor("#1AFF6B6B"), UiTheme.dp(this, 8)));
+                TextView errTv = UiTheme.makeText(this, activeDetailFileError, 14, UiTheme.COLOR_RED, false);
+                errTv.setGravity(Gravity.CENTER);
+                card.addView(errTv);
+                box.addView(card);
+                detailContentFrame.addView(box);
+                return;
+            }
+            if (activeDetailFiles.isEmpty()) {
+                LinearLayout emptyBox = new LinearLayout(this);
+                emptyBox.setGravity(Gravity.CENTER);
+                emptyBox.setPadding(outerPad, UiTheme.dp(this, 32), outerPad, outerPad);
+                if (isDetailLoading) {
+                    ProgressBar pb = new ProgressBar(this);
+                    pb.setIndeterminateTintList(ColorStateList.valueOf(UiTheme.COLOR_SYNOLOGY_BLUE));
+                    emptyBox.addView(pb);
+                } else {
+                    emptyBox.addView(UiTheme.makeText(this, "No files found in this task.", 15, UiTheme.COLOR_TEXT_MUTED, false));
+                }
+                detailContentFrame.addView(emptyBox);
+                return;
+            }
+
+            ListView listView = new ListView(this);
+            listView.setPadding(outerPad, outerPad, outerPad, outerPad);
+            listView.setClipToPadding(false);
+            listView.setDivider(new ColorDrawable(UiTheme.COLOR_DIVIDER));
+            listView.setDividerHeight(Math.max(1, UiTheme.dp(this, 1)));
+            listView.setSelector(new ColorDrawable(Color.TRANSPARENT));
+            listView.setLayoutParams(new FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT
+            ));
+
+            final List<TaskFileItem> filesSnapshot = new ArrayList<>(activeDetailFiles);
+            listView.setAdapter(new BaseAdapter() {
+                @Override
+                public int getCount() {
+                    return filesSnapshot.size();
+                }
+
+                @Override
+                public TaskFileItem getItem(int position) {
+                    return filesSnapshot.get(position);
+                }
+
+                @Override
+                public long getItemId(int position) {
+                    return filesSnapshot.get(position).index;
+                }
+
+                class Holder {
+                    TextView nameTv;
+                    TextView statsTv;
+                    Switch sw;
+                }
+
+                @Override
+                public View getView(int position, View convertView, ViewGroup parent) {
+                    Holder h;
+                    if (convertView == null) {
+                        LinearLayout row = new LinearLayout(MainActivity.this);
+                        row.setOrientation(LinearLayout.HORIZONTAL);
+                        row.setGravity(Gravity.CENTER_VERTICAL);
+                        row.setPadding(0, UiTheme.dp(MainActivity.this, 12), 0, UiTheme.dp(MainActivity.this, 12));
+
+                        LinearLayout col = new LinearLayout(MainActivity.this);
+                        col.setOrientation(LinearLayout.VERTICAL);
+                        LinearLayout.LayoutParams colLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+                        colLp.rightMargin = UiTheme.dp(MainActivity.this, 16);
+                        col.setLayoutParams(colLp);
+
+                        TextView nameTv = UiTheme.makeText(MainActivity.this, "", 14, UiTheme.COLOR_TEXT_SECONDARY, false);
+                        nameTv.setMaxLines(2);
+                        nameTv.setEllipsize(TextUtils.TruncateAt.MIDDLE);
+
+                        TextView statsTv = UiTheme.makeText(MainActivity.this, "", 12, UiTheme.COLOR_TEXT_MUTED, false);
+                        statsTv.setPadding(0, UiTheme.dp(MainActivity.this, 4), 0, 0);
+                        col.addView(nameTv);
+                        col.addView(statsTv);
+
+                        Switch sw = new Switch(MainActivity.this);
+                        UiTheme.styleSwitch(sw);
+
+                        row.addView(col);
+                        row.addView(sw);
+
+                        h = new Holder();
+                        h.nameTv = nameTv;
+                        h.statsTv = statsTv;
+                        h.sw = sw;
+                        row.setTag(h);
+                        convertView = row;
+                    } else {
+                        h = (Holder) convertView.getTag();
+                    }
+
+                    final TaskFileItem fileItem = getItem(position);
+                    double fPct = fileItem.size > 0 ? (fileItem.sizeDownloaded * 100.0) / fileItem.size : 0.0;
+                    h.nameTv.setText(fileItem.name);
+                    h.statsTv.setText(
+                            FormatUtils.formatBytes(fileItem.sizeDownloaded) + " / " + FormatUtils.formatBytes(fileItem.size)
+                                    + String.format(Locale.US, " (%.1f%%)", fPct)
+                    );
+
+                    h.sw.setOnCheckedChangeListener(null);
+                    h.sw.setChecked(fileItem.wanted);
+                    h.sw.setOnCheckedChangeListener((buttonView, isChecked) -> {
+                        fileItem.wanted = isChecked;
+                        bgExecutor.execute(() -> {
+                            try {
+                                sessionManager.execute(() -> {
+                                    sessionManager.getDs().setTaskFileWanted(
+                                            info.id,
+                                            Collections.singletonList(fileItem.index),
+                                            isChecked
+                                    );
+                                    return null;
+                                });
+                            } catch (Exception e) {
+                                fileItem.wanted = !isChecked;
+                                uiHandler.post(() -> {
+                                    Toast.makeText(MainActivity.this, "Failed to update file priority", Toast.LENGTH_SHORT).show();
+                                    notifyDataSetChanged();
+                                });
+                            }
+                        });
+                    });
+
+                    return convertView;
+                }
+            });
+
+            detailContentFrame.addView(listView);
+            return;
+        }
+
+        ScrollView scroll = new ScrollView(this);
+        scroll.setLayoutParams(new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+        ));
+        LinearLayout scrollInner = new LinearLayout(this);
+        scrollInner.setOrientation(LinearLayout.VERTICAL);
+        scrollInner.setPadding(outerPad, outerPad, outerPad, outerPad);
+
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
-        int pad = UiTheme.dp(this, 16);
-        card.setPadding(pad, pad, pad, pad);
+        card.setPadding(outerPad, outerPad, outerPad, outerPad);
         card.setBackground(UiTheme.roundedRect(UiTheme.COLOR_BG_CARD, UiTheme.dp(this, 8)));
 
         switch (activeDetailTab) {
@@ -1107,7 +1583,7 @@ public class MainActivity extends Activity {
                 card.addView(UiTheme.makeInfoRow(this, "Transfer (↓/↑):",
                         FormatUtils.formatBytes(info.sizeDownloaded) + " / " + FormatUtils.formatBytes(info.sizeUploaded)));
                 card.addView(UiTheme.makeInfoRow(this, "Downloaded Pieces:", FormatUtils.formatPieces(info)));
-                card.addView(UiTheme.makeInfoRow(this, "URL:", info.uri));
+                card.addView(UiTheme.makeInfoRow(this, "URL:", info.uri, 1));
 
                 DateFormat df = DateFormat.getDateTimeInstance();
                 if (info.startedTime > 0) {
@@ -1119,13 +1595,15 @@ public class MainActivity extends Activity {
                 if (info.createTime > 0 && info.startedTime == 0) {
                     card.addView(UiTheme.makeInfoRow(this, "Created:", df.format(new Date(info.createTime * 1000L))));
                 }
-                detailContentContainer.addView(card);
+                scrollInner.addView(card);
                 break;
             }
             case "Tracker": {
                 if (info.trackers == null || info.trackers.isEmpty()) {
-                    detailContentContainer.addView(UiTheme.makeText(this, "No tracker information available.", 15, UiTheme.COLOR_TEXT_MUTED, false));
-                    return;
+                    TextView emptyTrackerTv = UiTheme.makeText(this, "No tracker information available.", 15, UiTheme.COLOR_TEXT_MUTED, false);
+                    emptyTrackerTv.setGravity(Gravity.CENTER);
+                    scrollInner.addView(emptyTrackerTv);
+                    break;
                 }
                 List<TrackerItem> sortedTrackers = new ArrayList<>(info.trackers);
                 sortedTrackers.sort((a, b) -> {
@@ -1166,7 +1644,39 @@ public class MainActivity extends Activity {
 
                     String prefix = (cachedGeo != null && !cachedGeo.flag.isEmpty()) ? cachedGeo.flag + " " : "";
                     String hostWithPort = host + (port.isEmpty() ? "" : ":" + port);
-                    TextView tTitle = UiTheme.makeText(this, prefix + hostWithPort + (protocol.isEmpty() ? "" : "  [" + protocol + "]"), 14, UiTheme.COLOR_TEXT_SECONDARY, true);
+
+                    LinearLayout titleRow = new LinearLayout(this);
+                    titleRow.setOrientation(LinearLayout.HORIZONTAL);
+                    titleRow.setGravity(Gravity.CENTER_VERTICAL);
+                    LinearLayout.LayoutParams trLp = new LinearLayout.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            ViewGroup.LayoutParams.WRAP_CONTENT
+                    );
+                    trLp.bottomMargin = UiTheme.dp(this, 4);
+                    titleRow.setLayoutParams(trLp);
+
+                    TextView tTitle = UiTheme.makeText(this, prefix + hostWithPort, 14, UiTheme.COLOR_TEXT_SECONDARY, true);
+                    tTitle.setSingleLine(true);
+                    tTitle.setEllipsize(TextUtils.TruncateAt.END);
+                    tTitle.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+                    titleRow.addView(tTitle);
+
+                    if (!protocol.isEmpty()) {
+                        int badgeColor = "UDP".equals(protocol)
+                                ? Color.parseColor("#673AB7")
+                                : ("HTTPS".equals(protocol) ? UiTheme.COLOR_GREEN : Color.parseColor("#757575"));
+                        TextView badge = UiTheme.makeText(this, protocol, 10, UiTheme.COLOR_TEXT_PRIMARY, true);
+                        badge.setPadding(UiTheme.dp(this, 6), UiTheme.dp(this, 2), UiTheme.dp(this, 6), UiTheme.dp(this, 2));
+                        badge.setBackground(UiTheme.roundedRect(badgeColor, UiTheme.dp(this, 4)));
+                        LinearLayout.LayoutParams bLp = new LinearLayout.LayoutParams(
+                                ViewGroup.LayoutParams.WRAP_CONTENT,
+                                ViewGroup.LayoutParams.WRAP_CONTENT
+                        );
+                        bLp.leftMargin = UiTheme.dp(this, 8);
+                        badge.setLayoutParams(bLp);
+                        titleRow.addView(badge);
+                    }
+
                     LinearLayout tSubRow = new LinearLayout(this);
                     tSubRow.setOrientation(LinearLayout.HORIZONTAL);
                     tSubRow.setGravity(Gravity.CENTER_VERTICAL);
@@ -1189,17 +1699,19 @@ public class MainActivity extends Activity {
                     tSubRow.addView(tDown);
                     tSubRow.addView(UiTheme.makeText(this, String.valueOf(tr.peers), 12, UiTheme.COLOR_TEXT_MUTED, false));
 
-                    card.addView(tTitle);
+                    card.addView(titleRow);
                     card.addView(tSubRow);
                     card.addView(UiTheme.makeDivider(this, 4));
                 }
-                detailContentContainer.addView(card);
+                scrollInner.addView(card);
                 break;
             }
             case "Peers": {
                 if (info.peers == null || info.peers.isEmpty()) {
-                    detailContentContainer.addView(UiTheme.makeText(this, "No peer information available.", 15, UiTheme.COLOR_TEXT_MUTED, false));
-                    return;
+                    TextView emptyPeersTv = UiTheme.makeText(this, "No peer information available.", 15, UiTheme.COLOR_TEXT_MUTED, false);
+                    emptyPeersTv.setGravity(Gravity.CENTER);
+                    scrollInner.addView(emptyPeersTv);
+                    break;
                 }
                 for (PeerItem peer : info.peers) {
                     GeoInfo cachedGeo = GeolocationHelper.getCached(peer.address);
@@ -1225,88 +1737,12 @@ public class MainActivity extends Activity {
                     card.addView(sub);
                     card.addView(UiTheme.makeDivider(this, 4));
                 }
-                detailContentContainer.addView(card);
-                break;
-            }
-            case "File": {
-                if (activeDetailFileError != null) {
-                    TextView errTv = UiTheme.makeText(this, activeDetailFileError, 14, UiTheme.COLOR_RED, false);
-                    card.addView(errTv);
-                    detailContentContainer.addView(card);
-                    return;
-                }
-                if (activeDetailFiles.isEmpty()) {
-                    String emptyMsg = isDetailLoading ? "Loading files..." : "No files found in this task.";
-                    detailContentContainer.addView(UiTheme.makeText(this, emptyMsg, 15, UiTheme.COLOR_TEXT_MUTED, false));
-                    return;
-                }
-                int maxDisplay = Math.min(activeDetailFiles.size(), 200);
-                for (int i = 0; i < maxDisplay; i++) {
-                    TaskFileItem fileItem = activeDetailFiles.get(i);
-                    LinearLayout row = new LinearLayout(this);
-                    row.setOrientation(LinearLayout.HORIZONTAL);
-                    row.setGravity(Gravity.CENTER_VERTICAL);
-                    row.setPadding(0, UiTheme.dp(this, 8), 0, UiTheme.dp(this, 8));
-
-                    LinearLayout col = new LinearLayout(this);
-                    col.setOrientation(LinearLayout.VERTICAL);
-                    col.setLayoutParams(new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-                    double fPct = fileItem.size > 0 ? (fileItem.sizeDownloaded * 100.0) / fileItem.size : 0.0;
-                    col.addView(UiTheme.makeText(this, fileItem.name, 14, UiTheme.COLOR_TEXT_SECONDARY, false));
-                    col.addView(UiTheme.makeText(
-                            this,
-                            FormatUtils.formatBytes(fileItem.sizeDownloaded) + " / " + FormatUtils.formatBytes(fileItem.size)
-                                    + String.format(Locale.US, " (%.1f%%)", fPct),
-                            12,
-                            UiTheme.COLOR_TEXT_MUTED,
-                            false
-                    ));
-
-                    Switch sw = new Switch(this);
-                    sw.setChecked(fileItem.wanted);
-                    sw.setOnCheckedChangeListener((buttonView, isChecked) -> {
-                        fileItem.wanted = isChecked;
-                        bgExecutor.execute(() -> {
-                            try {
-                                sessionManager.execute(() -> {
-                                    sessionManager.getDs().setTaskFileWanted(
-                                            info.id,
-                                            Collections.singletonList(fileItem.index),
-                                            isChecked
-                                    );
-                                    return null;
-                                });
-                            } catch (Exception e) {
-                                fileItem.wanted = !isChecked;
-                                uiHandler.post(() -> {
-                                    Toast.makeText(this, "Failed to update file priority", Toast.LENGTH_SHORT).show();
-                                    renderTaskDetailTabContent();
-                                });
-                            }
-                        });
-                    });
-
-                    row.addView(col);
-                    row.addView(sw);
-                    card.addView(row);
-                    card.addView(UiTheme.makeDivider(this, 2));
-                }
-                if (activeDetailFiles.size() > maxDisplay) {
-                    TextView moreNotice = UiTheme.makeText(
-                            this,
-                            "Showing first " + maxDisplay + " of " + activeDetailFiles.size() + " files.",
-                            12,
-                            UiTheme.COLOR_TEXT_MUTED,
-                            false
-                    );
-                    moreNotice.setGravity(Gravity.CENTER);
-                    moreNotice.setPadding(0, UiTheme.dp(this, 12), 0, UiTheme.dp(this, 6));
-                    card.addView(moreNotice);
-                }
-                detailContentContainer.addView(card);
+                scrollInner.addView(card);
                 break;
             }
         }
+        scroll.addView(scrollInner);
+        detailContentFrame.addView(scroll);
     }
 
     private void refreshTaskDetailAsync(String taskId, boolean silent) {
@@ -1817,11 +2253,37 @@ public class MainActivity extends Activity {
         // 3. Results List
         searchResultsContainer.removeAllViews();
         if (results.isEmpty()) {
-            String msg = !searching ? "Find content to download" : (finished ? "No results found." : "Waiting for search engines...");
-            TextView empty = UiTheme.makeText(this, msg, 16, UiTheme.COLOR_TEXT_MUTED, false);
-            empty.setGravity(Gravity.CENTER);
-            empty.setPadding(0, UiTheme.dp(this, 80), 0, 0);
-            searchResultsContainer.addView(empty);
+            LinearLayout emptyBox = new LinearLayout(this);
+            emptyBox.setOrientation(LinearLayout.VERTICAL);
+            emptyBox.setGravity(Gravity.CENTER_HORIZONTAL);
+            emptyBox.setPadding(0, UiTheme.dp(this, 80), 0, 0);
+
+            if (!searching) {
+                ImageView emptyIc = makeTintedIcon(R.drawable.ic_search, 64, Color.parseColor("#333333"));
+                ((LinearLayout.LayoutParams) emptyIc.getLayoutParams()).bottomMargin = UiTheme.dp(this, 16);
+                emptyBox.addView(emptyIc);
+                TextView findTv = UiTheme.makeText(this, "Find content to download", 18, Color.parseColor("#444444"), false);
+                findTv.setGravity(Gravity.CENTER);
+                emptyBox.addView(findTv);
+            } else if (!finished) {
+                ProgressBar pb = new ProgressBar(this);
+                pb.setIndeterminateTintList(ColorStateList.valueOf(UiTheme.COLOR_SYNOLOGY_BLUE));
+                LinearLayout.LayoutParams pbLp = new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT
+                );
+                pbLp.bottomMargin = UiTheme.dp(this, 16);
+                pb.setLayoutParams(pbLp);
+                emptyBox.addView(pb);
+                TextView waitTv = UiTheme.makeText(this, "Waiting for search engines...", 16, UiTheme.COLOR_TEXT_MUTED, false);
+                waitTv.setGravity(Gravity.CENTER);
+                emptyBox.addView(waitTv);
+            } else {
+                TextView noResTv = UiTheme.makeText(this, "No results found.", 18, Color.parseColor("#444444"), false);
+                noResTv.setGravity(Gravity.CENTER);
+                emptyBox.addView(noResTv);
+            }
+            searchResultsContainer.addView(emptyBox);
             return;
         }
 
@@ -1947,9 +2409,10 @@ public class MainActivity extends Activity {
                     }
 
                     @Override
-                    public void onSubmitUrlTask(String url, String destination, Dialog dialog) {
+                    public void onSubmitUrlTask(String url, String destination, Dialog dialog, Runnable resetButtonState) {
                         if (url.isEmpty()) {
-                            Toast.makeText(MainActivity.this, "Please enter a URL or magnet link", Toast.LENGTH_SHORT).show();
+                            resetButtonState.run();
+                            showErrorAlert("Error", "Please enter a URL or magnet link");
                             return;
                         }
                         bgExecutor.execute(() -> {
@@ -1961,14 +2424,20 @@ public class MainActivity extends Activity {
                                     handlePostCreateTaskResult(res, destination, "Task added successfully");
                                 });
                             } catch (Exception e) {
-                                uiHandler.post(() -> Toast.makeText(MainActivity.this, "Failed to add task: " + e.getMessage(), Toast.LENGTH_LONG).show());
+                                uiHandler.post(() -> {
+                                    resetButtonState.run();
+                                    showErrorAlert("Error", "Failed to add task: " + e.getMessage());
+                                });
                             }
                         });
                     }
 
                     @Override
-                    public void onSubmitTorrentFile(IncomingPayload filePayload, String destination, Dialog dialog) {
-                        if (filePayload == null || filePayload.fileBytes == null) return;
+                    public void onSubmitTorrentFile(IncomingPayload filePayload, String destination, Dialog dialog, Runnable resetButtonState) {
+                        if (filePayload == null || filePayload.fileBytes == null) {
+                            resetButtonState.run();
+                            return;
+                        }
                         bgExecutor.execute(() -> {
                             try {
                                 CreateTaskResult res = sessionManager.execute(() ->
@@ -1983,7 +2452,10 @@ public class MainActivity extends Activity {
                                     handlePostCreateTaskResult(res, destination, "Torrent file uploaded successfully");
                                 });
                             } catch (Exception e) {
-                                uiHandler.post(() -> Toast.makeText(MainActivity.this, "Failed to upload torrent: " + e.getMessage(), Toast.LENGTH_LONG).show());
+                                uiHandler.post(() -> {
+                                    resetButtonState.run();
+                                    showErrorAlert("Error", "Failed to upload torrent: " + e.getMessage());
+                                });
                             }
                         });
                     }
@@ -2124,7 +2596,14 @@ public class MainActivity extends Activity {
                 AppDialogs.showConfirmDialog(MainActivity.this, "Logout", "Are you sure you want to disconnect?", "Logout", () -> {
                     bgExecutor.execute(() -> {
                         sessionManager.disconnect(false);
-                        uiHandler.post(() -> navigateTo(Screen.LOGIN));
+                        uiHandler.post(() -> {
+                            needsOtp = false;
+                            loginDraftUrl = null;
+                            loginDraftAccount = null;
+                            loginDraftPassword = null;
+                            loginDraftOtp = "";
+                            navigateTo(Screen.LOGIN);
+                        });
                     });
                 });
             }

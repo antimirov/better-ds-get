@@ -12,6 +12,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
+import java.io.UnsupportedEncodingException;
 import java.net.HttpURLConnection;
 import java.net.SocketTimeoutException;
 import java.net.URL;
@@ -500,7 +501,12 @@ public class SynologyClient {
     }
 
     private static String urlEncode(String val) {
-        return URLEncoder.encode(val != null ? val : "", StandardCharsets.UTF_8);
+        String safeVal = val != null ? val : "";
+        try {
+            return URLEncoder.encode(safeVal, StandardCharsets.UTF_8.name());
+        } catch (UnsupportedEncodingException e) {
+            throw new IllegalStateException("UTF-8 encoding not supported", e);
+        }
     }
 
     public static void configureTrustAllHttps(HttpsURLConnection https) {
