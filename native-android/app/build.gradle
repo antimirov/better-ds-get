@@ -7,13 +7,19 @@ android {
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.antimirov.betterdsget.nativeapp"
+        applicationId = "com.antimirov.betterdsget"
         minSdk = 26
         targetSdk = 35
         versionCode = 4
         versionName = "1.6.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    def keystorePropsFile = rootProject.file('keystore.properties')
+    def keystoreProps = new Properties()
+    if (keystorePropsFile.exists()) {
+        keystorePropsFile.withInputStream { keystoreProps.load(it) }
     }
 
     signingConfigs {
@@ -24,6 +30,14 @@ android {
             keyAlias 'androiddebugkey'
             keyPassword 'android'
         }
+        release {
+            if (keystorePropsFile.exists()) {
+                storeFile rootProject.file(keystoreProps['storeFile'])
+                storePassword keystoreProps['storePassword']
+                keyAlias keystoreProps['keyAlias']
+                keyPassword keystoreProps['keyPassword']
+            }
+        }
     }
 
     buildTypes {
@@ -31,7 +45,7 @@ android {
             minifyEnabled = true
             shrinkResources = true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
-            signingConfig = signingConfigs.debug
+            signingConfig = keystorePropsFile.exists() ? signingConfigs.release : signingConfigs.debug
         }
         debug {
             signingConfig = signingConfigs.debug

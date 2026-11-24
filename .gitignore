@@ -45,6 +45,8 @@ secrets.txt
 /native-android/build/
 /native-android/app/build/
 /native-android/local.properties
+/native-android/keystore.properties
+keystore.properties
 *.keystore
 
 # Untracked local files
