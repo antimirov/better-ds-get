@@ -2,12 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
-## [1.6.0] - 2026-11-24
+## [1.6.0] - 2026-11-25
 
 ### Changed
-- **Pure Native Android (Java) Rewrite**: Rewrote the app from React Native / Expo into pure Android Java (`native-android/`) with zero external runtime dependencies, reducing the release APK size from ~61 MB to ~608 KB and eliminating JS bridge cold-start overhead.
+- **Pure Native Android (Java) Rewrite**: Rewrote the app from React Native / Expo into pure Android Java (`native-android/`) with zero external runtime dependencies, reducing the release APK size from ~61 MB to ~609 KB and eliminating JS bridge cold-start overhead.
 - **Direct In-Memory `.torrent` Multipart Upload**: Replaced base64 temp-file staging with direct in-memory ordered multipart streaming in `SynologyClient`.
-- **UI & Visual Refinements**: Added colored up/down speed arrows and color-coded progress text in the Tasks list, live step-by-step progress labels during session restore and QuickConnect resolution, preserved login form fields across 2FA/OTP prompts with an inline Connect spinner, added a `(Default)` label on the default destination folder, and tightened Task Info URL display and file path middle-ellipsizing.
+- **UI & Visual Refinements**: Added colored up/down speed arrows and color-coded progress text in the Tasks list, live step-by-step progress labels during session restore and QuickConnect resolution, an inline download spinner on Search rows with instant optimistic task cards on Tasks, keyboard-aware scrollable login screen (`WindowInsets.Type.ime()`), preserved login form fields across 2FA/OTP prompts with an inline Connect spinner, `(Default)` destination folder label, and tighter Task Info URL / file path middle-ellipsizing.
 
 ### Added
 - **QuickConnect Relay & Roaming Re-Resolution**: Falls back to Synology QuickConnect Relay (`relay_dn` / `request_tunnel`) when direct LAN/WAN/DDNS ports are unreachable (e.g., without router port forwarding), and automatically re-resolves QuickConnect IDs on `NetworkError` during session restore or reconnect with self-signed HTTPS probe support.

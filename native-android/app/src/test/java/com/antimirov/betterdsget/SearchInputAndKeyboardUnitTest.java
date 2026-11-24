@@ -235,5 +235,15 @@ public class SearchInputAndKeyboardUnitTest {
         // Live step-by-step progress during session restore & QuickConnect resolution
         assertTrue("MainActivity must stream live restore status updates to restoreStatusTv",
                 mainContent.contains("restoreStatusTv") && mainContent.contains("updateRestoreStatus("));
+
+        // Android 15 IME inset handling + scrollable login view
+        assertTrue("MainActivity must apply WindowInsets.Type.ime() and wrap login view in ScrollView",
+                mainContent.contains("WindowInsets.Type.ime()")
+                        && mainContent.contains("systemImeInset")
+                        && mainContent.contains("loginScroll.setFillViewport(true)"));
+
+        // Instant optimistic task card + search row spinner
+        assertTrue("MainActivity must show inline search download spinner and optimistic task placeholder",
+                mainContent.contains("rowSpinner") && mainContent.contains("onTaskAddedOptimistic("));
     }
 }

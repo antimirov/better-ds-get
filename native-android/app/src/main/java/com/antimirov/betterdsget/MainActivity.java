@@ -116,6 +116,9 @@ public class MainActivity extends Activity {
     private String defaultDestination = "";
     private String searchDestination = "";
     private boolean isInitialTasksLoading = true;
+    private TaskItem pendingOptimisticTask = null;
+    private long pendingOptimisticUntilMs = 0L;
+    private int pendingBaselineCount = -1;
     private boolean isManualRefreshing = false;
     private long manualRefreshStartMs = 0L;
     private float pullDownStartY = -1f;
@@ -148,6 +151,7 @@ public class MainActivity extends Activity {
     private TextView tabSearchLabel;
     private int systemTopInset = 0;
     private int systemBottomInset = 0;
+    private int systemImeInset = 0;
 
     // Live-updatable containers
     private TextView restoreStatusTv;
@@ -355,12 +359,15 @@ public class MainActivity extends Activity {
         rootLayout.setOnApplyWindowInsetsListener((v, insets) -> {
             int top = 0;
             int bottom = 0;
+            int imeBottom = 0;
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 android.graphics.Insets bars = insets.getInsets(
                         WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout()
                 );
+                android.graphics.Insets ime = insets.getInsets(WindowInsets.Type.ime());
                 top = bars.top;
                 bottom = bars.bottom;
+                imeBottom = ime.bottom;
             } else {
                 top = insets.getSystemWindowInsetTop();
                 bottom = insets.getSystemWindowInsetBottom();
@@ -368,11 +375,12 @@ public class MainActivity extends Activity {
 
             systemTopInset = top;
             systemBottomInset = bottom;
+            systemImeInset = imeBottom;
 
             // Apply safe area top padding so content never collides with status bar / camera notch
             rootLayout.setPadding(0, systemTopInset, 0, 0);
 
-            // Dynamically adjust bottom bar height / content padding for navigation bar / gesture pill
+            // Dynamically adjust bottom bar height / content padding for navigation bar / soft keyboard
             updateInsetsLayout();
 
             return insets;
@@ -456,15 +464,17 @@ public class MainActivity extends Activity {
         boolean showBottomBar = sessionManager != null && sessionManager.isConnected()
                 && (currentScreen == Screen.TASKS || currentScreen == Screen.SEARCH);
         if (showBottomBar) {
-            contentFrame.setPadding(0, 0, 0, 0);
+            int barHeight = UiTheme.dp(this, 58) + systemBottomInset;
+            int extraIme = Math.max(0, systemImeInset - barHeight);
+            contentFrame.setPadding(0, 0, 0, extraIme);
             bottomTabBar.setPadding(0, 0, 0, systemBottomInset);
             ViewGroup.LayoutParams lp = bottomTabBar.getLayoutParams();
             if (lp != null) {
-                lp.height = UiTheme.dp(this, 58) + systemBottomInset;
+                lp.height = barHeight;
                 bottomTabBar.setLayoutParams(lp);
             }
         } else {
-            contentFrame.setPadding(0, 0, 0, systemBottomInset);
+            contentFrame.setPadding(0, 0, 0, Math.max(systemBottomInset, systemImeInset));
         }
     }
 
@@ -1176,6 +1186,7 @@ public class MainActivity extends Activity {
 
             outerCard.addView(body);
             outerCard.setOnClickListener(v -> {
+                if (item.id != null && item.id.startsWith("__pending_")) return;
                 activeDetailTask = item;
                 activeDetailFiles = new ArrayList<>();
                 activeDetailFileError = null;
@@ -1227,7 +1238,27 @@ public class MainActivity extends Activity {
                 final TransferStats newStats = st;
                 uiHandler.post(() -> {
                     isInitialTasksLoading = false;
-                    tasks = newTasks;
+                    List<TaskItem> mergedTasks = newTasks;
+                    if (pendingOptimisticTask != null) {
+                        boolean appeared = newTasks.size() > pendingBaselineCount
+                                || System.currentTimeMillis() > pendingOptimisticUntilMs;
+                        if (!appeared) {
+                            for (TaskItem t : newTasks) {
+                                if (pendingOptimisticTask.title.equals(t.title)) {
+                                    appeared = true;
+                                    break;
+                                }
+                            }
+                        }
+                        if (appeared) {
+                            pendingOptimisticTask = null;
+                        } else {
+                            mergedTasks = new ArrayList<>(newTasks.size() + 1);
+                            mergedTasks.add(pendingOptimisticTask);
+                            mergedTasks.addAll(newTasks);
+                        }
+                    }
+                    tasks = mergedTasks;
                     transferStats = newStats;
                     if (isManual) {
                         finishManualRefreshSpinner();
@@ -2381,31 +2412,45 @@ public class MainActivity extends Activity {
             engineTv.setTypeface(Typeface.defaultFromStyle(Typeface.ITALIC));
             mainCol.addView(engineTv);
 
-            ImageView dlBtn = makeTintedIcon(R.drawable.ic_download, 24, UiTheme.COLOR_SYNOLOGY_BLUE);
-            int dlPad = UiTheme.dp(this, 8);
+            FrameLayout dlBox = new FrameLayout(this);
             int dlSize = UiTheme.dp(this, 40);
             LinearLayout.LayoutParams dlLp = new LinearLayout.LayoutParams(dlSize, dlSize);
             dlLp.leftMargin = UiTheme.dp(this, 8);
-            dlBtn.setLayoutParams(dlLp);
-            dlBtn.setPadding(dlPad, dlPad, dlPad, dlPad);
-            dlBtn.setClickable(true);
-            dlBtn.setFocusable(true);
+            dlBox.setLayoutParams(dlLp);
+            dlBox.setClickable(true);
+            dlBox.setFocusable(true);
             android.graphics.drawable.Drawable dlSel = UiTheme.makeSelectableBackground(this);
-            if (dlSel != null) dlBtn.setBackground(dlSel);
+            if (dlSel != null) dlBox.setBackground(dlSel);
 
-            dlBtn.setOnClickListener(v -> addSearchResultTask(item));
+            ImageView dlBtn = makeTintedIcon(R.drawable.ic_download, 24, UiTheme.COLOR_SYNOLOGY_BLUE);
+            int dlPad = UiTheme.dp(this, 8);
+            dlBtn.setLayoutParams(new FrameLayout.LayoutParams(dlSize, dlSize));
+            dlBtn.setPadding(dlPad, dlPad, dlPad, dlPad);
+
+            ProgressBar rowSpinner = new ProgressBar(this);
+            int spSize = UiTheme.dp(this, 20);
+            FrameLayout.LayoutParams spLp = new FrameLayout.LayoutParams(spSize, spSize, Gravity.CENTER);
+            rowSpinner.setLayoutParams(spLp);
+            rowSpinner.setIndeterminateTintList(ColorStateList.valueOf(UiTheme.COLOR_SYNOLOGY_BLUE));
+            rowSpinner.setVisibility(View.GONE);
+
+            dlBox.addView(dlBtn);
+            dlBox.addView(rowSpinner);
+            dlBox.setOnClickListener(v -> addSearchResultTask(item, dlBox, dlBtn, rowSpinner));
 
             row.addView(mainCol);
-            row.addView(dlBtn);
+            row.addView(dlBox);
             searchResultsContainer.addView(row);
             searchResultsContainer.addView(UiTheme.makeDivider(this, 0));
         }
     }
 
-    private void addSearchResultTask(SearchResultItem item) {
+    private void addSearchResultTask(SearchResultItem item, FrameLayout dlBox, ImageView dlBtn, ProgressBar rowSpinner) {
         UiTheme.hideKeyboard(this, null);
         final String dest = !searchDestination.isEmpty() ? searchDestination : defaultDestination;
-        Toast.makeText(this, "Adding task...", Toast.LENGTH_SHORT).show();
+        dlBox.setEnabled(false);
+        dlBtn.setVisibility(View.INVISIBLE);
+        rowSpinner.setVisibility(View.VISIBLE);
         bgExecutor.execute(() -> {
             try {
                 CreateTaskResult res = sessionManager.execute(() ->
@@ -2413,14 +2458,34 @@ public class MainActivity extends Activity {
                 if (!res.listIds.isEmpty()) {
                     String listId = res.listIds.get(0);
                     List<TaskFileItem> files = sessionManager.getDs().getFileList(listId);
-                    uiHandler.post(() -> AppDialogs.showFileSelectionDialog(this, files, wanted ->
-                            finalizeSelectiveDownload(listId, wanted, dest)));
+                    uiHandler.post(() -> {
+                        dlBox.setEnabled(true);
+                        dlBtn.setVisibility(View.VISIBLE);
+                        rowSpinner.setVisibility(View.GONE);
+                        if (files == null || files.isEmpty()) {
+                            finalizeSelectiveDownload(listId, Collections.emptyList(), dest, item.title, item.size);
+                        } else {
+                            AppDialogs.showFileSelectionDialog(this, files, wanted ->
+                                    finalizeSelectiveDownload(listId, wanted, dest, item.title, item.size));
+                        }
+                    });
                 } else {
                     SmartDownloadService.startOrKick(this);
-                    uiHandler.post(() -> Toast.makeText(this, "Download task added: " + item.title, Toast.LENGTH_SHORT).show());
+                    uiHandler.post(() -> {
+                        dlBox.setEnabled(true);
+                        dlBtn.setVisibility(View.VISIBLE);
+                        rowSpinner.setVisibility(View.GONE);
+                        onTaskAddedOptimistic(item.title, item.size);
+                        Toast.makeText(this, "Download task added: " + item.title, Toast.LENGTH_SHORT).show();
+                    });
                 }
             } catch (Exception e) {
-                uiHandler.post(() -> Toast.makeText(this, "Failed to add task: " + e.getMessage(), Toast.LENGTH_LONG).show());
+                uiHandler.post(() -> {
+                    dlBox.setEnabled(true);
+                    dlBtn.setVisibility(View.VISIBLE);
+                    rowSpinner.setVisibility(View.GONE);
+                    Toast.makeText(this, "Failed to add task: " + e.getMessage(), Toast.LENGTH_LONG).show();
+                });
             }
         });
     }
@@ -2461,7 +2526,7 @@ public class MainActivity extends Activity {
                                         sessionManager.getDs().createTask(url, destination, true, null, null));
                                 uiHandler.post(() -> {
                                     dialog.dismiss();
-                                    handlePostCreateTaskResult(res, destination, "Task added successfully");
+                                    handlePostCreateTaskResult(res, destination, "Task added successfully", "New download task");
                                 });
                             } catch (Exception e) {
                                 uiHandler.post(() -> {
@@ -2489,7 +2554,7 @@ public class MainActivity extends Activity {
                                         ));
                                 uiHandler.post(() -> {
                                     dialog.dismiss();
-                                    handlePostCreateTaskResult(res, destination, "Torrent file uploaded successfully");
+                                    handlePostCreateTaskResult(res, destination, "Torrent file uploaded successfully", filePayload.fileName);
                                 });
                             } catch (Exception e) {
                                 uiHandler.post(() -> {
@@ -2503,7 +2568,28 @@ public class MainActivity extends Activity {
         );
     }
 
-    private void handlePostCreateTaskResult(CreateTaskResult res, String destination, String successMsg) {
+    private void onTaskAddedOptimistic(String title, long size) {
+        pendingBaselineCount = tasks.size();
+        TaskItem placeholder = new TaskItem();
+        placeholder.id = "__pending_" + System.currentTimeMillis();
+        placeholder.title = (title != null && !title.isEmpty()) ? title : "Adding task...";
+        placeholder.size = Math.max(0L, size);
+        placeholder.status = "waiting";
+        pendingOptimisticTask = placeholder;
+        pendingOptimisticUntilMs = System.currentTimeMillis() + 5000L;
+
+        List<TaskItem> updated = new ArrayList<>(tasks.size() + 1);
+        updated.add(placeholder);
+        updated.addAll(tasks);
+        tasks = updated;
+        if (currentScreen == Screen.TASKS) {
+            renderTaskCards();
+        }
+        refreshTasksAsync();
+        uiHandler.postDelayed(this::refreshTasksAsync, 900L);
+    }
+
+    private void handlePostCreateTaskResult(CreateTaskResult res, String destination, String successMsg, String displayTitle) {
         if (res != null && !res.listIds.isEmpty()) {
             String listId = res.listIds.get(0);
             Dialog progress = AppDialogs.showLoadingDialog(this, "Reading torrent contents...");
@@ -2515,10 +2601,10 @@ public class MainActivity extends Activity {
                             if (progress.isShowing()) progress.dismiss();
                         } catch (Exception ignored) {}
                         if (files == null || files.isEmpty()) {
-                            finalizeSelectiveDownload(listId, Collections.emptyList(), destination);
+                            finalizeSelectiveDownload(listId, Collections.emptyList(), destination, displayTitle, 0L);
                         } else {
                             AppDialogs.showFileSelectionDialog(this, files, wanted ->
-                                    finalizeSelectiveDownload(listId, wanted, destination));
+                                    finalizeSelectiveDownload(listId, wanted, destination, displayTitle, 0L));
                         }
                     });
                 } catch (Exception e) {
@@ -2533,11 +2619,11 @@ public class MainActivity extends Activity {
         } else {
             SmartDownloadService.startOrKick(this);
             Toast.makeText(this, successMsg, Toast.LENGTH_SHORT).show();
-            refreshTasksAsync();
+            onTaskAddedOptimistic(displayTitle, 0L);
         }
     }
 
-    private void finalizeSelectiveDownload(String listId, List<Integer> wantedIndices, String destination) {
+    private void finalizeSelectiveDownload(String listId, List<Integer> wantedIndices, String destination, String displayTitle, long displaySize) {
         Dialog progress = AppDialogs.showLoadingDialog(this, "Starting download...");
         bgExecutor.execute(() -> {
             try {
@@ -2549,7 +2635,7 @@ public class MainActivity extends Activity {
                         if (progress.isShowing()) progress.dismiss();
                     } catch (Exception ignored) {}
                     Toast.makeText(this, "Download started with selected files", Toast.LENGTH_SHORT).show();
-                    refreshTasksAsync();
+                    onTaskAddedOptimistic(displayTitle, displaySize);
                 });
             } catch (Exception e) {
                 uiHandler.post(() -> {
