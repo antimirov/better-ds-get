@@ -1,9 +1,11 @@
 package com.antimirov.betterdsget;
 
 import com.antimirov.betterdsget.api.Models.LoginResult;
+import com.antimirov.betterdsget.api.QuickConnectResolver;
 import com.antimirov.betterdsget.api.SynologyClient;
 import com.antimirov.betterdsget.api.SynologyError;
 
+import org.json.JSONObject;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
@@ -13,6 +15,7 @@ import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.LinkedHashMap;
+import java.util.List;
 
 import javax.net.ssl.HttpsURLConnection;
 
@@ -190,6 +193,67 @@ public class SynologyClientIntegrationTest {
                 sessionMgrContent.contains("FormatUtils.isQuickConnectId(saved.originalAddress)"));
         assertTrue("SessionManager must re-resolve QuickConnect on reconnect NetworkError",
                 sessionMgrContent.contains("FormatUtils.isQuickConnectId(credentials.originalAddress)"));
+    }
+
+    @Test
+    public void testQuickConnectDirectAndRelayCandidateExtractionAndTunnelFallback() throws Exception {
+        JSONObject serverInfo = new JSONObject("""
+                {
+                  "interface": [{"ip": "192.168.1.14"}],
+                  "external": {"ip": "87.209.243.155"},
+                  "ddns": "nas.synology.me"
+                }
+                """);
+        JSONObject serviceInfo = new JSONObject("""
+                {
+                  "port": 5001,
+                  "ext_port": 0,
+                  "relay_dn": "synr-de7.NAS.direct.quickconnect.to",
+                  "relay_ip": "195.181.170.81",
+                  "relay_port": 28582
+                }
+                """);
+
+        List<String> direct = QuickConnectResolver.extractDirectCandidates(serverInfo, serviceInfo);
+        assertTrue(direct.contains("https://192.168.1.14:5001"));
+        assertTrue(direct.contains("http://192.168.1.14:5000"));
+        assertTrue("Must not send plain HTTP to HTTPS port 5001", !direct.contains("http://192.168.1.14:5001"));
+        assertTrue(direct.contains("https://87.209.243.155:5001"));
+        assertTrue(direct.contains("https://nas.synology.me:5001"));
+
+        List<String> relay = QuickConnectResolver.extractRelayCandidates(serviceInfo);
+        assertEquals(2, relay.size());
+        assertEquals("https://synr-de7.NAS.direct.quickconnect.to:28582", relay.get(0));
+        assertEquals("https://195.181.170.81:28582", relay.get(1));
+
+        // Verify request_tunnel is called when get_server_info has no active relay_port and direct fails
+        server.enqueue(new MockResponse().setResponseCode(200).setBody("""
+                {
+                  "errno": 0,
+                  "env": {"control_host": "dec.quickconnect.to"},
+                  "server": {"interface": [], "external": {}, "ddns": "null"},
+                  "service": {"port": 5001, "ext_port": 0, "relay_port": 0}
+                }
+                """));
+        server.enqueue(new MockResponse().setResponseCode(200).setBody("""
+                {
+                  "errno": 0,
+                  "service": {"relay_dn": "", "relay_port": 0}
+                }
+                """));
+
+        String mockServUrl = server.url("/Serv.php").toString();
+        try {
+            QuickConnectResolver.resolveQuickConnect("testqcid", mockServUrl);
+            fail("Expected exception when both direct and relay fail");
+        } catch (Exception e) {
+            assertTrue(e.getMessage().contains("direct or relay"));
+        }
+
+        RecordedRequest infoReq = server.takeRequest();
+        assertTrue(infoReq.getBody().readUtf8().contains("\"command\":\"get_server_info\""));
+        RecordedRequest tunnelReq = server.takeRequest();
+        assertTrue(tunnelReq.getBody().readUtf8().contains("\"command\":\"request_tunnel\""));
     }
 }
 

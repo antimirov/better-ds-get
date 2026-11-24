@@ -231,5 +231,9 @@ public class SearchInputAndKeyboardUnitTest {
                 mainContent.contains("ListView listView = new ListView(this)") && mainContent.contains("new BaseAdapter()"));
         assertTrue("TaskDetail File tab must no longer truncate after 200 items",
                 !mainContent.contains("Display capped at 200 items"));
+
+        // Live step-by-step progress during session restore & QuickConnect resolution
+        assertTrue("MainActivity must stream live restore status updates to restoreStatusTv",
+                mainContent.contains("restoreStatusTv") && mainContent.contains("updateRestoreStatus("));
     }
 }

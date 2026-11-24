@@ -23,31 +23,122 @@ import java.util.concurrent.TimeUnit;
 import javax.net.ssl.HttpsURLConnection;
 
 /**
- * Resolves a Synology QuickConnect ID to the fastest reachable direct HTTP/HTTPS NAS URL.
+ * Resolves a Synology QuickConnect ID to the fastest reachable direct HTTP/HTTPS NAS URL,
+ * falling back to Synology's QuickConnect Relay tunnel when direct/forwarded ports are unreachable.
  */
 public class QuickConnectResolver {
+    public interface ProgressListener {
+        void onStatus(String status);
+    }
+
     private static final String QUICKCONNECT_API_URL = "https://global.quickconnect.to/Serv.php";
+    private static final int DIRECT_PROBE_TIMEOUT_MS = 3000;
+    private static final int RELAY_PROBE_TIMEOUT_MS = 6000;
 
     public static String resolveQuickConnect(String quickConnectId) throws Exception {
-        return resolveQuickConnect(quickConnectId, QUICKCONNECT_API_URL);
+        return resolveQuickConnect(quickConnectId, QUICKCONNECT_API_URL, null);
+    }
+
+    public static String resolveQuickConnect(String quickConnectId, ProgressListener listener) throws Exception {
+        return resolveQuickConnect(quickConnectId, QUICKCONNECT_API_URL, listener);
     }
 
     public static String resolveQuickConnect(String quickConnectId, String relayUrl) throws Exception {
+        return resolveQuickConnect(quickConnectId, relayUrl, null);
+    }
+
+    public static String resolveQuickConnect(String quickConnectId, String relayUrl, ProgressListener listener) throws Exception {
         if (quickConnectId == null || quickConnectId.trim().isEmpty()) {
             throw new IllegalArgumentException("Invalid QuickConnect ID");
         }
+        String cleanId = quickConnectId.trim();
 
+        notifyStatus(listener, "Querying QuickConnect server...");
         JSONObject payload = new JSONObject();
         payload.put("version", 1);
         payload.put("command", "get_server_info");
-        payload.put("serverID", quickConnectId.trim());
+        payload.put("serverID", cleanId);
         payload.put("id", "dsm_portal_https");
         payload.put("get_ca_fingerprints", true);
 
-        HttpURLConnection conn = null;
-        JSONObject data;
+        JSONObject data = postQuickConnectCommand(relayUrl, payload);
+
+        int errno = data.optInt("errno", -1);
+        if (errno != 0) {
+            throw new Exception("QuickConnect failed. The ID might be incorrect or the NAS is offline. (Error code: " + errno + ")");
+        }
+
+        JSONObject serverInfo = data.optJSONObject("server");
+        if (serverInfo == null) {
+            throw new Exception("Unexpected QuickConnect response: Missing server data.");
+        }
+        JSONObject serviceInfo = data.optJSONObject("service");
+
+        // Stage 1: Direct LAN / WAN / DDNS candidates (prefers local LAN when on the same Wi-Fi)
+        List<String> directCandidates = extractDirectCandidates(serverInfo, serviceInfo);
+        if (!directCandidates.isEmpty()) {
+            notifyStatus(listener, "Probing direct LAN / WAN addresses...");
+            try {
+                return probeUrls(directCandidates, DIRECT_PROBE_TIMEOUT_MS);
+            } catch (Exception ignored) {
+                // Direct/port-forwarded endpoints unreachable — fall through to QuickConnect Relay
+            }
+        }
+
+        // Stage 2a: Use relay endpoint if already provided in get_server_info
+        List<String> relayCandidates = extractRelayCandidates(serviceInfo);
+        if (!relayCandidates.isEmpty()) {
+            notifyStatus(listener, "Connecting via QuickConnect Relay...");
+            try {
+                return probeUrls(relayCandidates, RELAY_PROBE_TIMEOUT_MS);
+            } catch (Exception ignored) {
+                // Existing relay endpoint stale or unreachable — request a fresh tunnel below
+            }
+        }
+
+        // Stage 2b: Request a fresh QuickConnect Relay tunnel via control_host
+        notifyStatus(listener, "Requesting QuickConnect Relay tunnel...");
+        String tunnelEndpoint = relayUrl;
+        if (QUICKCONNECT_API_URL.equals(relayUrl)) {
+            JSONObject env = data.optJSONObject("env");
+            String controlHost = env != null ? env.optString("control_host", "") : "";
+            if (!controlHost.isEmpty()) {
+                tunnelEndpoint = "https://" + controlHost + "/Serv.php";
+            }
+        }
+
+        JSONObject tunnelPayload = new JSONObject();
+        tunnelPayload.put("version", 1);
+        tunnelPayload.put("command", "request_tunnel");
+        tunnelPayload.put("serverID", cleanId);
+        tunnelPayload.put("id", "dsm_portal_https");
+        tunnelPayload.put("platform", "android");
+
         try {
-            URL url = new URL(relayUrl);
+            JSONObject tunnelData = postQuickConnectCommand(tunnelEndpoint, tunnelPayload);
+            if (tunnelData.optInt("errno", -1) == 0) {
+                List<String> freshRelayCandidates = extractRelayCandidates(tunnelData.optJSONObject("service"));
+                if (!freshRelayCandidates.isEmpty()) {
+                    return probeUrls(freshRelayCandidates, RELAY_PROBE_TIMEOUT_MS);
+                }
+            }
+        } catch (Exception ignored) {
+            // Fall through to final error message
+        }
+
+        throw new Exception("Could not reach the NAS on any of the resolved QuickConnect addresses (direct or relay). Ensure it is powered on and QuickConnect is enabled.");
+    }
+
+    private static void notifyStatus(ProgressListener listener, String status) {
+        if (listener != null) {
+            listener.onStatus(status);
+        }
+    }
+
+    private static JSONObject postQuickConnectCommand(String endpointUrl, JSONObject payload) throws Exception {
+        HttpURLConnection conn = null;
+        try {
+            URL url = new URL(endpointUrl);
             conn = (HttpURLConnection) url.openConnection();
             conn.setRequestMethod("POST");
             conn.setConnectTimeout(8000);
@@ -69,25 +160,21 @@ public class QuickConnectResolver {
                     sb.append(line);
                 }
             }
-            data = new JSONObject(sb.toString());
+            return new JSONObject(sb.toString());
         } finally {
             if (conn != null) conn.disconnect();
         }
+    }
 
-        int errno = data.optInt("errno", -1);
-        if (errno != 0) {
-            throw new Exception("QuickConnect failed. The ID might be incorrect or the NAS is offline. (Error code: " + errno + ")");
-        }
-
-        JSONObject serverInfo = data.optJSONObject("server");
-        if (serverInfo == null) {
-            throw new Exception("Unexpected QuickConnect response: Missing server data.");
-        }
-        JSONObject serviceInfo = data.optJSONObject("service");
-        int httpPort = serviceInfo != null ? serviceInfo.optInt("port", 5000) : 5000;
-        int httpsPort = serviceInfo != null ? serviceInfo.optInt("ext_port", 5001) : 5001;
-        if (httpPort <= 0) httpPort = 5000;
-        if (httpsPort <= 0) httpsPort = 5001;
+    public static List<String> extractDirectCandidates(JSONObject serverInfo, JSONObject serviceInfo) {
+        // Because we query id="dsm_portal_https", service.port is DSM's HTTPS port (typically 5001)
+        // and service.ext_port is the external mapped HTTPS port (0 if port forwarding is disabled).
+        int lanHttpsPort = (serviceInfo != null && serviceInfo.optInt("port", 0) > 0)
+                ? serviceInfo.optInt("port")
+                : 5001;
+        int extHttpsPort = (serviceInfo != null && serviceInfo.optInt("ext_port", 0) > 0)
+                ? serviceInfo.optInt("ext_port")
+                : lanHttpsPort;
 
         Set<String> candidates = new LinkedHashSet<>();
 
@@ -96,35 +183,47 @@ public class QuickConnectResolver {
             for (int i = 0; i < interfaces.length(); i++) {
                 JSONObject iface = interfaces.optJSONObject(i);
                 if (iface != null) {
-                    String ip = iface.optString("ip", "");
-                    if (!ip.isEmpty()) {
-                        candidates.add("http://" + ip + ":" + httpPort);
-                        candidates.add("https://" + ip + ":" + httpsPort);
-                    }
+                    addHostCandidates(candidates, iface.optString("ip", ""), lanHttpsPort);
                 }
             }
         }
 
         JSONObject external = serverInfo.optJSONObject("external");
         if (external != null) {
-            String extIp = external.optString("ip", "");
-            if (!extIp.isEmpty()) {
-                candidates.add("http://" + extIp + ":" + httpPort);
-                candidates.add("https://" + extIp + ":" + httpsPort);
-            }
+            addHostCandidates(candidates, external.optString("ip", ""), extHttpsPort);
         }
 
-        String ddns = serverInfo.optString("ddns", "");
-        if (!ddns.isEmpty() && !"null".equalsIgnoreCase(ddns)) {
-            candidates.add("http://" + ddns + ":" + httpPort);
-            candidates.add("https://" + ddns + ":" + httpsPort);
-        }
+        addHostCandidates(candidates, serverInfo.optString("ddns", ""), extHttpsPort);
+        return new ArrayList<>(candidates);
+    }
 
-        if (candidates.isEmpty()) {
-            throw new Exception("QuickConnect returned no valid IP addresses or hostnames.");
+    private static void addHostCandidates(Set<String> candidates, String host, int httpsPort) {
+        if (host == null || host.isEmpty() || "null".equalsIgnoreCase(host)) return;
+        candidates.add("https://" + host + ":" + httpsPort);
+        if (httpsPort != 5000) {
+            candidates.add("http://" + host + ":5000");
         }
+    }
 
-        return probeUrls(new ArrayList<>(candidates), 5000);
+    public static List<String> extractRelayCandidates(JSONObject serviceInfo) {
+        Set<String> candidates = new LinkedHashSet<>();
+        if (serviceInfo == null) return new ArrayList<>();
+        int relayPort = serviceInfo.optInt("relay_port", 0);
+        if (relayPort <= 0) return new ArrayList<>();
+
+        String relayDn = serviceInfo.optString("relay_dn", "");
+        if (!relayDn.isEmpty() && !"null".equalsIgnoreCase(relayDn)) {
+            candidates.add("https://" + relayDn + ":" + relayPort);
+        }
+        String relayDual = serviceInfo.optString("relay_dualstack", "");
+        if (!relayDual.isEmpty() && !"null".equalsIgnoreCase(relayDual)) {
+            candidates.add("https://" + relayDual + ":" + relayPort);
+        }
+        String relayIp = serviceInfo.optString("relay_ip", "");
+        if (!relayIp.isEmpty() && !"null".equalsIgnoreCase(relayIp)) {
+            candidates.add("https://" + relayIp + ":" + relayPort);
+        }
+        return new ArrayList<>(candidates);
     }
 
     public static String probeUrls(List<String> urls, int timeoutMs) throws Exception {

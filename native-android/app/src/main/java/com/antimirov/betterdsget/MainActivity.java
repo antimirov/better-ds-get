@@ -150,6 +150,8 @@ public class MainActivity extends Activity {
     private int systemBottomInset = 0;
 
     // Live-updatable containers
+    private TextView restoreStatusTv;
+    private String restoreStatusText = "Restoring session...";
     private TextView tasksHeaderTitle;
     private LinearLayout tasksHeaderStats;
     private FrameLayout tasksRefreshCircle;
@@ -241,9 +243,24 @@ public class MainActivity extends Activity {
         buildRootLayout();
         renderScreen(Screen.LOGIN);
 
-        // Attempt auto-restore session in background
+        // Attempt auto-restore session in background with live step status
+        SessionManager.StateListener restoreStateListener = (state, prev, err) -> {
+            String msg = null;
+            if (state == ConnectionState.AUTHORIZING) {
+                msg = "Authorizing session...";
+            } else if (state == ConnectionState.FETCHING_INFO) {
+                msg = "Loading Download Station...";
+            }
+            if (msg != null) {
+                final String finalMsg = msg;
+                uiHandler.post(() -> updateRestoreStatus(finalMsg));
+            }
+        };
+        sessionManager.addStateListener(restoreStateListener);
         bgExecutor.execute(() -> {
-            boolean restored = sessionManager.tryRestore();
+            boolean restored = sessionManager.tryRestore(status ->
+                    uiHandler.post(() -> updateRestoreStatus(status)));
+            sessionManager.removeStateListener(restoreStateListener);
             uiHandler.post(() -> {
                 isRestoringSession = false;
                 if (restored) {
@@ -552,6 +569,13 @@ public class MainActivity extends Activity {
         });
     }
 
+    private void updateRestoreStatus(String status) {
+        restoreStatusText = status;
+        if (restoreStatusTv != null && isRestoringSession) {
+            restoreStatusTv.setText(status);
+        }
+    }
+
     private void showErrorAlert(String title, String message) {
         if (isFinishing() || isDestroyed()) return;
         new AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
@@ -587,7 +611,9 @@ public class MainActivity extends Activity {
             TextView title = UiTheme.makeText(this, "Better DS Get", 22, UiTheme.COLOR_SYNOLOGY_BLUE, true);
             title.setPadding(0, UiTheme.dp(this, 12), 0, UiTheme.dp(this, 6));
             card.addView(title);
-            card.addView(UiTheme.makeText(this, "Restoring session...", 14, UiTheme.COLOR_TEXT_MUTED, false));
+            restoreStatusTv = UiTheme.makeText(this, restoreStatusText, 14, UiTheme.COLOR_TEXT_MUTED, false);
+            restoreStatusTv.setGravity(Gravity.CENTER);
+            card.addView(restoreStatusTv);
             outer.addView(card);
             return outer;
         }
@@ -717,7 +743,8 @@ public class MainActivity extends Activity {
                     String finalUrl;
                     if (FormatUtils.isQuickConnectId(rawUrl)) {
                         uiHandler.post(() -> connectBtnText.setText("Resolving QuickConnect..."));
-                        finalUrl = QuickConnectResolver.resolveQuickConnect(rawUrl);
+                        finalUrl = QuickConnectResolver.resolveQuickConnect(rawUrl, status ->
+                                uiHandler.post(() -> connectBtnText.setText(status)));
                     } else {
                         finalUrl = FormatUtils.normalizeDirectUrl(rawUrl);
                     }

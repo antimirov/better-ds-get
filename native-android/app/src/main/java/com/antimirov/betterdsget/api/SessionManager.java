@@ -177,18 +177,25 @@ public class SessionManager {
     }
 
     public boolean tryRestore() {
+        return tryRestore(null);
+    }
+
+    public boolean tryRestore(QuickConnectResolver.ProgressListener listener) {
         if (store == null) return false;
         StoredCredentials saved = store.loadCredentials();
         if (saved == null || saved.url == null || saved.url.isEmpty()) {
             return false;
         }
+        if (listener != null) listener.onStatus("Connecting to saved NAS address...");
         try {
             connect(saved.url, saved.account, saved.password, null, true, saved.originalAddress);
             return true;
         } catch (NetworkError netErr) {
             if (FormatUtils.isQuickConnectId(saved.originalAddress)) {
                 try {
-                    String resolvedUrl = QuickConnectResolver.resolveQuickConnect(saved.originalAddress);
+                    if (listener != null) listener.onStatus("Saved address unreachable, switching to QuickConnect...");
+                    String resolvedUrl = QuickConnectResolver.resolveQuickConnect(saved.originalAddress, listener);
+                    if (listener != null) listener.onStatus("Authorizing session...");
                     connect(resolvedUrl, saved.account, saved.password, null, true, saved.originalAddress);
                     return true;
                 } catch (Exception ignored) {
