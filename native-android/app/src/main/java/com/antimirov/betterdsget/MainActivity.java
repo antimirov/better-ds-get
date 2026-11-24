@@ -586,12 +586,23 @@ public class MainActivity extends Activity {
     }
 
     private View buildLoginView() {
+        ScrollView loginScroll = new ScrollView(this);
+        loginScroll.setBackgroundColor(UiTheme.COLOR_BG_CARD);
+        loginScroll.setFillViewport(true);
+        loginScroll.setLayoutParams(new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+        ));
+
         LinearLayout outer = new LinearLayout(this);
         outer.setOrientation(LinearLayout.VERTICAL);
         outer.setGravity(Gravity.CENTER);
         int pad = UiTheme.dp(this, 20);
         outer.setPadding(pad, pad, pad, pad);
-        outer.setBackgroundColor(UiTheme.COLOR_BG_CARD);
+        outer.setLayoutParams(new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+        ));
 
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
@@ -615,7 +626,8 @@ public class MainActivity extends Activity {
             restoreStatusTv.setGravity(Gravity.CENTER);
             card.addView(restoreStatusTv);
             outer.addView(card);
-            return outer;
+            loginScroll.addView(outer);
+            return loginScroll;
         }
 
         TextView title = UiTheme.makeText(this, "Better DS Get", 26, UiTheme.COLOR_SYNOLOGY_BLUE, true);
@@ -784,7 +796,8 @@ public class MainActivity extends Activity {
 
         card.addView(connectBtnContainer);
         outer.addView(card);
-        return outer;
+        loginScroll.addView(outer);
+        return loginScroll;
     }
 
     // ── 2. Tasks List View ─────────────────────────────────────────
