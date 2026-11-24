@@ -2,7 +2,7 @@
 
 A fast, lightweight, pure native Android client (Java) for Synology's Download Station, featuring **QuickConnect + QuickConnect Relay** support, **BT Search**, **live download speedometer notifications**, and direct `.torrent` / `magnet:` intent handling — in a **~608 KB** zero-dependency APK.
 
-<img width="466" alt="Better DS Get Preview" src="./docs/images/v1.0.0.jpeg" />
+<img width="420" alt="Better DS Get v1.6.0 Demo" src="./docs/images/v1.6.0-demo.gif" />
 
 [View Changelog](./CHANGELOG.md)
 
