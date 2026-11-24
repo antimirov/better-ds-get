@@ -94,6 +94,8 @@ npx expo start
 - [ ] Promote `native-android/` to repository root and retire legacy React Native files.
 - [ ] Add a "Remember Me" checkbox to the login screen.
 - [ ] Dark mode - ability to switch to light theme.
+- [ ] Show torrent upload/download ratio percentage ([#1](https://github.com/antimirov/better-ds-get/issues/1)).
+- [ ] Show configured max seeding ratio ([#1](https://github.com/antimirov/better-ds-get/issues/1)).
 
 ## License
 
